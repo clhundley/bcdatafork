@@ -1,5 +1,5 @@
 #!/bin/bash -e
-#SBATCH --job-name=hisat2_index
+#SBATCH --job-name=hisat2_HGFM_index
 #SBATCH --time=7-00:00:00
 #SBATCH --output=/work/clh162/OysterRNA24/logs/hisat2_index.out
 #SBATCH --error=/work/clh162/OysterRNA24/logs/hisat2_index.err
@@ -14,10 +14,15 @@
 module load HISAT2
 
 ## Set Paths ## 
-GENOME=/work/clh162/OysterRNA24/hisat2_align/c.virginica_genome.fa
-GTF=/work/clh162/OysterRNA24/hisat2_align/c.virginica_annotation.gtf
-INDEX_DIR=/work/clh162/OysterRNA24/hisat2_align/hisat2_index
+GENOME=/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25_genome.fa
+GFF=/work/clh162/OysterRNA24/hisat2_align/Cvi_RU25.gff3
+INDEX_DIR=/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/hisat2_index
 mkdir -p ${INDEX_DIR}
+
+## Create a GFT file from the GFF file ##
+
+#GFT=/work/clh162/OysterRNA24/hisat2_align/Cvi_RU25.gft
+
 
 ## Create HGFM (Hierarchical Graph FM) index ## 
     # Compared to a HFM (Hierarchical FM) index which aligns reads to a single reference genome, 
@@ -34,4 +39,4 @@ hisat2-build \
     -p ${SLURM_CPUS_PER_TASK} \
     -ss ${INDEX_DIR}/c.virginica_splice_sites.txt \
     -exon ${INDEX_DIR}/c.virginica_exons.txt \
-    ${GENOME} ${INDEX_DIR}/C.virginica_index 
+    ${GENOME} ${INDEX_DIR}/c.virginica_HGFM_index 
