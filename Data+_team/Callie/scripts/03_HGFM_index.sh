@@ -1,8 +1,8 @@
 #!/bin/bash -e
 #SBATCH --job-name=hisat2_HGFM_index
 #SBATCH --time=7-00:00:00
-#SBATCH --output=/work/clh162/OysterRNA24/logs/hisat2_index.out
-#SBATCH --error=/work/clh162/OysterRNA24/logs/hisat2_index.err
+#SBATCH --output=/work/clh162/OysterRNA24/logs/hisat2_HGFM_index.out
+#SBATCH --error=/work/clh162/OysterRNA24/logs/hisat2_HGFM_index.err
 #SBATCH --partition=common
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
