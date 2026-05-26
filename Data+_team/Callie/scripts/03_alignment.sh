@@ -29,13 +29,13 @@ SAMPLES=($(ls ${RAW_DIR}/*_R1_001.fastq.gz | sed 's/_R1_001.fastq.gz//' | xargs 
 # Index an individual sample from the list for this array task
 SAMPLE=${SAMPLES[$SLURM_ARRAY_TASK_ID-1]}
 # List the sample to see if naming the correct thing 
-echo ${SAMPLE}
+echo "Sample being processed here: " ${SAMPLE}
 
 # Define R1 and R2 for the sample 
 R1=${TRIMMED_DIR}/${SAMPLE}_R1_001_val_1.fq.gz
 R2=${TRIMMED_DIR}/${SAMPLE}_R2_001_val_2.fq.gz
 # List R1 and R2 to see if naming the correct thing 
-echo "R1 is " ${R1} "and R2 is " ${R2}
+echo "Path to R1 is " ${R1} "and path to R2 is " ${R2}
 
 ## Run Alignment ##
 echo "Aligning sample:" ${SAMPLE}
