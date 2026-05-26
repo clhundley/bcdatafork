@@ -10,7 +10,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=callie.hundley@duke.edu
 
-# Activate conda
+## Activate conda environment with Multiqc program loaded ##
 source /hpc/home/clh162/miniconda3/etc/profile.d/conda.sh
 conda activate RNA-seq
 
