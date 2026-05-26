@@ -1,7 +1,7 @@
 #!/bin/bash -e
 #SBATCH --job-name=alignment_array
 #SBATCH --time=7-00:00:00
-#SBATCH --array=1-36
+#SBATCH --array=1-18
 #SBATCH --output=/work/clh162/OysterRNA24/logs/hisat2_alignment_%A_%a.out
 #SBATCH --error=/work/clh162/OysterRNA24/logs/hisat2_alignment_%A_%a.err
 #SBATCH --partition=common
@@ -15,28 +15,37 @@
 module load HISAT2
 
 ## Set Paths ## 
+RAW_DIR=/work/clh162/OysterRNA24/rawreads
 TRIMMED_DIR=/work/clh162/OysterRNA24/trimmedreads
 INDEX_DIR=/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/hisat2_index
 ALIGNED_DIR=/work/clh162/OysterRNA24/hisat2_align/alignedreads
-BAM_DIR=/work/clh162/OysterRNA24/hisat2_index
-mkdir -p ${ALIGNED_DIR} ${BAM_DIR}
+mkdir -p ${ALIGNED_DIR} 
 
 
 ## Set up direction/path to each sample ##
 # Make list of trimmed sample names (without _R1/_R2 suffix)
-SAMPLES=($(ls ${TRIMMED_DIR}/*_R1_001_val_1.fq.gz | sed 's/_R1_001_val_1.fq.gz//' | xargs -n 1 basename))
+SAMPLES=($(ls ${RAW_DIR}/*_R1_001.fastq.gz | sed 's/_R1_001.fastq.gz//' | xargs -n 1 basename))
 
 # Index an individual sample from the list for this array task
 SAMPLE=${SAMPLES[$SLURM_ARRAY_TASK_ID-1]}
+# List the sample to see if naming the correct thing 
+echo ${SAMPLE}
 
 # Define R1 and R2 for the sample 
 R1=${TRIMMED_DIR}/${SAMPLE}_R1_001_val_1.fq.gz
 R2=${TRIMMED_DIR}/${SAMPLE}_R2_001_val_2.fq.gz
+# List R1 and R2 to see if naming the correct thing 
+echo "R1 is " ${R1} "and R2 is " ${R2}
 
-echo "Aligning sample: ${SAMPLE}..."
+## Run Alignment ##
+echo "Aligning sample:" ${SAMPLE}
 hisat2 \
     -p ${SLURM_CPUS_PER_TASK} \
-    -x ${INDEX_DIR} \
-    -1 ${TRIMMED_DIR}/${R1} \
-    -2 ${TRIMMED_DIR}/${R2} \
-    -S ${ALIGNED_DIR}/${SAMPLE}.sam 
+    -x ${INDEX_DIR}/c.virginica_HFM_index \
+    -1 ${R1} \
+    -2 ${R2} \
+    -S ${ALIGNED_DIR}/${SAMPLE}.sam \
+    --summary-file ${ALIGNED_DIR}/${SAMPLE}_hisat2_summary.txt
+
+echo "Alignment of " ${SAMPLE} "complete!"
+
