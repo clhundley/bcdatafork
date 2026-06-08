@@ -1,0 +1,103 @@
+---
+title: "OysterRNA24 DESeq2 Analysis"
+author: "Callie Hundley"
+format: 
+  html:
+    df-print: paged 
+    code-fold: true 
+    code-tools: true
+editor: visual
+---
+
+# Project Overview 
+
+
+## Loading packages 
+
+```{r}
+library(tidyverse)
+library(readxl)
+# BiocManager::install("DESeq2") # <- install only once!
+library(DESeq2)
+library(ggplot2)
+```
+
+
+## Loading data 
+
+```{r}
+# Read in the gene count data 
+counts_data <- read_tsv("/work/clh162/OysterRNA24/hisat2_align/featureCounts_counts/gene_counts_matrix.txt") %>% 
+  column_to_rownames(var = "Geneid")
+head(counts_data)
+
+# Read in the sample data (defining sequenced samples)
+coldata <- read_excel("/work/clh162/OysterRNA24/xRNA for BC Summer 2024.xlsx", 
+    skip = 2) %>% #skipping first two rows of .xls file
+  column_to_rownames(var = "Sample_ID") #assigning the sample names as the row names 
+
+```
+
+## DESeq2 Workflow 
+
+### 1. Initial data tidying 
+
+We are going to combine these two data sets off of the information that is shared  between them: the **names** of our sequenced samples. Because of this, we need to make sure that the names of the samples are identical between these two data frames.
+
+From looking at our two data frames uploaded in the last code block, the names of the sample in the `counts_data` have an additional suffix on the end of each. We should shorten these to match the names of the samples in the `coldata` frame. 
+
+
+```{r}
+# rename the columns in the counts_data data frame to match sample names in the coldata data frame 
+colnames(counts_data) <- sub("(_Gill).*", "\\1", colnames(counts_data))
+
+colnames(counts_data)
+rownames(coldata)
+
+# make sure the row names in coldata matches column names in counts_data
+all(rownames(coldata) %in% colnames(counts_data)) #TRUE
+
+# make sure these names are also in the same order 
+all(rownames(coldata) == colnames(counts_data)) #FALSE
+
+# re-order 
+coldata[colnames(counts_data), ] #this line works, so let's save it now
+coldata <- coldata[colnames(counts_data), ]
+
+# re-check that the names are in the same order
+all(rownames(coldata) == colnames(counts_data)) #TRUE
+```
+
+Now that we have matching column/row names and they are in the right order, we can construct our DESeqDataSet object!
+
+
+### 2. Create a DESeq2 dataset object 
+
+We will use the `DESeqDataSetFromMatrix()` command to create a dataset from our count data and sample data that is organized into the format required for the `DESeq()` command.  
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts_data,
+                       colData = coldata,
+                       design = ~ Location)
+dds
+```
+
+
+### 3. Important pre-DESeq steps 
+
+
+
+
+
+### 4. Run DESeq on dataset object 
+
+
+
+
+
+
+
+
+
+
+
