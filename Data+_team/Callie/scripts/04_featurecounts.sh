@@ -1,9 +1,8 @@
 #!/bin/bash -e
 #SBATCH --job-name=featureCounts_array
 #SBATCH --time=7-00:00:00
-#SBATCH --array=1-18
-#SBATCH --output=/work/clh162/OysterRNA24/logs/featureCounts_gtf_%A_%a.out
-#SBATCH --error=/work/clh162/OysterRNA24/logs/featureCounts_gtf_%A_%a.err
+#SBATCH --output=/work/clh162/OysterRNA24/logs/featureCounts_gtf_%A.out
+#SBATCH --error=/work/clh162/OysterRNA24/logs/featureCounts_gtf_%A.err
 #SBATCH --partition=common
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
@@ -17,7 +16,7 @@ module load Subread
 ## Set paths ## 
 GENOME=/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared
 BAM_DIR=/work/clh162/OysterRNA24/hisat2_align/alignedreads_bam
-COUNT_DIR=/work/clh162/OysterRNA24/hisat2_align/counts
+COUNT_DIR=/work/clh162/OysterRNA24/hisat2_align/featureCounts_counts
 mkdir -p ${COUNT_DIR}
 
 ## Set up direction/path to each sample ##
@@ -35,7 +34,7 @@ featureCounts \
     -T ${SLURM_CPUS_PER_TASK} \
     -p --countReadPairs -B \
     -a ${GENOME}/*.gtf \
-    -o ${COUNT_DIR}/${SAMPLE}_gene_counts.txt \
-    ${BAM_DIR}/${SAMPLE}_sorted.bam   
+    -o ${COUNT_DIR}/gene_counts.txt \
+    ${BAM_DIR}/*_sorted.bam   
 
-echo "featureCounts completed for sample" ${SAMPLE}
+echo "featureCounts completed for samples in" ${BAM_DIR} "directory"
