@@ -1,0 +1,111 @@
+---
+title: "OysterRNA24 GO Analysis"
+author: "Callie Hundley"
+format: 
+  html:
+    df-print: paged 
+    code-fold: true 
+    code-tools: true
+editor: visual
+---
+
+
+# Gene ontology analysis 
+
+To conduct GO analysis we need a list of gene symbols, entrez ids, or ensembl ids. Depending on the type of information you have, you may need to convert this information into a different format. Gene annotation involves identifying information about the locations of genes along with their function, in addition to information about other genetic and noncoding features. 
+
+Because we do not have **gene annotations** (i.e. gene ids) for this new *C. virginica* genome, we need to create them. We can use the aligner `DIAMOND` to do this. `DIAMOND` is great because it allows you to run actual nucleotide/protein sequences against a database to find alignment/matches for annotations instead of just using standard gene IDs. `DIAMOND` is not the same as `BLASTP`; it does runs similar searches and returns similar files as `BLASTP`, but does it at a much faster rate!  
+
+So let's run a search with `DIAMOND` (in terminal -- the code below is just for reference). 
+
+First we need to install diamond: 
+^ You can do this by having the executable file of the program (diamond.exe) downloaded into the folder where your gene.fasta files and reference files are. 
+
+```{r}
+# installing diamond (within our RNA-seq environment)
+
+# conda activate RNA-seq 
+# conda install bioconda::diamond
+```
+
+What `BLASTP` does is that it spends time looks for a 3-sequential sequences somewhere in the file being queried that matches any reference database; this can end up taking a long time (up to hours!). `DIAMOND` bypasses this by having a function to compile an a index to sequence databases that allows for faster search. So next, we will make this index for each of our reference genomes; these will be saved as `.dmnd` files.
+
+We will make this index for the new (2025) genome. 
+
+```{r}
+# make index once 
+# generic format 
+  # diamond makedb --in newgenomeproteome.fasta -d newgenomeproteomedb
+# specific line (actually run - see 06_diamond.sh)
+  # diamond makedb --in /work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.pep -d Cvi_RU25proteome
+```
+
+Finally, using this created index, we can run a `DIAMOND` search. 
+
+```{r}
+# run search for each protein -- looking for every sequence in the index.dmnd file that has great similarity to the individual protein provided.  
+# genetic format 
+  # diamond blastp -q oldgenome.fa -db newgenomeproteomedb.dmnd -o old_to_new_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+# specific line (actually run - see 06_diamond.sh)
+  # diamond blastp -q /work/clh162/OysterRNA24/DESeq2/Cvi_3.0_GCF_002022765.2/protein.faa --db /work/clh162/OysterRNA24/DESeq2/Cvi_RU25proteome.dmnd -o old_to_new_diamond --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+```
+
+Looking at the output file, we will be primarily interested in a few reported results from the 12 tab output values: 
+
+* Tab 3: Sequence identity -- The % of amino acids identical between the querey sequence and the match sequence found within the database.dmnd file.
+* Tab 11: E score -- How likely are you to produce a hit of similar or better quality than the one produced here if you were to run this query search against random sequences. **Lower = better** 
+* Tab 12: Bit score -- Think of as the # of points scored by a homology search. **Higher = better**
+
+Q: What if `DIAMOND` returns more than one line for the `blastp` search?
+
+* If `DIAMOND` doesn't return anything, it would mean that there is no ortholog for that gene 
+
+* If `DIAMOND` returns more than one line, could be a sign of genome duplication, including the gene that is being queried against the database. 
+
+Now that we have gene annotation files from the `DIAMOND` program, we can carry out our **GO analysis**. 
+
+
+```{r}
+# Installing packages -- RUN THIS CODE CHUNK ONCE 
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(version = "3.20") #newest version is 3.23 but need to use 3.20 with R version 4.4
+```
+
+```{r}
+# Loading libraries 
+library(clusterProfiler)
+library(AnnotationDbi)
+```
+
+Let's focus on running our GO analysis only on a subset of significantly expressed genes. First to get the significantly differentially expressed genes, we can subset from our results dataframe from the dds. 
+
+```{r}
+sign_DEG <- na.omit(results)
+sign_DEG <- sign_DEG[sign_DEG$padj < 0.05 & sign_DEG$baseMean > 50] # need to decide what threshold values we want to use for defining significance
+```
+
+
+## GO analysis for positively differentially expressed genes that have a value above 0.5 for log2FoldChange 
+
+First, we can subset our significant DEG dataset (sign_DEG) to target this group. 
+
+```{r}
+sign_DEG[sign_DEG$log2FoldChange > 0.5, ]
+```
+
+Then we need to pull out a list of the gene names from this subset.
+
+```{r}
+rownames(sign_DEG[sign_DEG$log2FoldChange > 0.5, ])
+# save this list 
+list <- rownames(sign_DEG[sign_DEG$log2FoldChange > 0.5, ])
+```
+
+Using this list we can now run GO analysis
+
+```{r}
+GO_results <- clusterProfiler::enrichGO(genes = genes_to_test,
+                                        OrgDb = ,
+                                        keyType = )
+```
