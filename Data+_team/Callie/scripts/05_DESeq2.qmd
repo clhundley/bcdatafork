@@ -16,6 +16,7 @@ editor: visual
 
 ```{r}
 library(tidyverse)
+library(lubridate)
 library(readxl)
 # BiocManager::install("DESeq2") # <- install only once!
 library(DESeq2)
@@ -28,14 +29,16 @@ library(ggplot2)
 ```{r}
 # Read in the gene count data 
 counts_data <- read_tsv("/work/clh162/OysterRNA24/hisat2_align/featureCounts_counts/gene_counts_matrix.txt") %>% 
-  column_to_rownames(var = "Geneid")
+  column_to_rownames(var = "Geneid") #assigning the gene names as the row names 
 head(counts_data)
+
 
 # Read in the sample data (defining sequenced samples)
 coldata <- read_excel("/work/clh162/OysterRNA24/xRNA for BC Summer 2024.xlsx", 
     skip = 2) %>% #skipping first two rows of .xls file
-  column_to_rownames(var = "Sample_ID") #assigning the sample names as the row names 
-
+  column_to_rownames(var = "Sample_ID") %>% #assigning the sample names as the row names 
+  mutate(Month_collected = month(Date_Collected, label = TRUE, abbr = FALSE)) # creating streamlined column for graphing/analysis by date
+head(coldata)
 ```
 
 ## DESeq2 Workflow 
@@ -59,17 +62,47 @@ all(rownames(coldata) %in% colnames(counts_data)) #TRUE
 
 # make sure these names are also in the same order 
 all(rownames(coldata) == colnames(counts_data)) #FALSE
+match(colnames(counts_data), rownames(coldata)) 
 
 # re-order 
-coldata[colnames(counts_data), ] #this line works, so let's save it now
-coldata <- coldata[colnames(counts_data), ]
+counts_data[ ,rownames(coldata)]#this line works, so let's save it now
+counts_data <- counts_data[ ,rownames(coldata)]
+# Alternative way to write to match on the order of the counts_data column sample names
+# coldata[colnames(counts_data), ] 
+# coldata <- coldata[colnames(counts_data), ]
 
 # re-check that the names are in the same order
 all(rownames(coldata) == colnames(counts_data)) #TRUE
+
 ```
 
-Now that we have matching column/row names and they are in the right order, we can construct our DESeqDataSet object!
+Now that we have matching column/row names and they are in the right order, we can construct our SummarizedExperiment (se) and DESeqDataSet (dds) objects! 
 
+### 2. Create a se object 
+
+**SummarizedExperiment (se) object:**
+The idea of a se object is that it compiles all the gene expression data, gene features/annotations, and sample metadata into one cross-talking format. [The Bioconductor tutorial](https://carpentries-incubator.github.io/bioc-intro/60-next-steps.html#next-steps) talks about the value of creating a se object for inital omics data exploration. This tutorial summarizes how the se object is set up: 
+
+* One (or more) assay(s) containing the quantitative omics data (expression data), stored as a matrix-like object. Features (genes, transcripts, proteins, …) are defined along the rows, and samples along the columns.
+  * The count object(s) will be saved in assays slot
+
+* A sample metadata slot containing sample information, stored as a data frame. Rows from this table represent samples (rows should be exact matches to the columns of the expression data which also hold the sample IDs). 
+  * This sample information will be stored in `colData` slot (sample metadata)
+
+* A feature metadata slot containing information describing each gene, stored as a data frame. The rows of this data frame match exactly the rows of the expression data (i.e. the gene names).
+  * The rowranges object describing the genes will be stored in rowRanges slot (features metadata)
+
+
+```{r}
+se <- SummarizedExperiment(
+    assays = list(counts = as.matrix(counts_data)),
+    rowRanges = as(rowranges, "GRanges"),
+    colData = coldata
+)
+```
+
+
+The same Bioconductor tutorial referenced above eventually creates a **DESeq2** data object from the **se** object, however, you can also create a **DESeq2** object directly from a gene count matrix. 
 
 ### 2. Create a DESeq2 dataset object 
 
@@ -78,22 +111,162 @@ We will use the `DESeqDataSetFromMatrix()` command to create a dataset from our 
 ```{r}
 dds <- DESeqDataSetFromMatrix(countData = counts_data,
                        colData = coldata,
-                       design = ~ Location)
+                       design = ~ Location) 
 dds
 ```
 
 
 ### 3. Important pre-DESeq steps 
 
+#### Removing unexpresed genes 
+
+People will use different thresholds for this step, but let's remove genes that have fewer than 5 reads (this seems to be a very minimal threshold). 
+
+```{r}
+nrow(dds)
+
+# Remove genes/rows that do not have > 5 total counts 
+dds <- dds[rowSums(assay(dds, "counts")) > 5, ]
+nrow(dds)
+```
 
 
 
 
 ### 4. Run DESeq on dataset object 
 
+```{r}
+dds <- DESeq(dds)
+```
+
+Analyzing results 
+
+```{r}
+results <- results(dds, contrast = c("condition", "S", "C"))
+```
 
 
 
+
+# Seperate this into a new .qmd file !!!!!!!!!!
+
+
+# Weighted Gene Co-expression Network Analysis (WGCNA)
+
+A subsequent reasonable step in our analysis is to run a WGCNA. When we run this on our significantly differentially expressed genes, it will create clusters/modules of similarly expressed (or co-expressed) genes. This can be helpful as it will direct us into interesting genes to look at for additional analysis like gene ontology classification, instead of starting with our thousands of inital genes. 
+
+What we need to do here: 
+
+* Construct a correlation network, calculate soft thresholds, and group genes into modules.
+* Correlate with Traits: Identify which gene modules correlate with your conditions or phenotypes.
+
+```{r}
+
+```
+
+
+
+# Seperate this into a new .qmd file !!!!!!!!!!
+
+# Gene ontology analysis 
+
+To conduct GO analysis we need a list of gene symbols, entrez ids, or ensembl ids. Depending on the type of information you have, you may need to convert this information into a different format. Gene annotation involves identifying information about the locations of genes along with their function, in addition to information about other genetic and noncoding features. 
+
+Because we do not have **gene annotations** (i.e. gene ids) for this new *C. virginica* genome, we need to create them. We can use the aligner `DIAMOND` to do this. `DIAMOND` is great because it allows you to run actual nucleotide/protein sequences against a database to find alignment/matches for annotations instead of just using standard gene IDs. `DIAMOND` is not the same as `BLASTP`; it does runs similar searches and returns similar files as `BLASTP`, but does it at a much faster rate!  
+
+So let's run a search with `DIAMOND` (in terminal -- the code below is just for reference). 
+
+First we need to install diamond: 
+^ You can do this by having the executable file of the program (diamond.exe) downloaded into the folder where your gene.fasta files and reference files are. 
+
+```{r}
+# installing diamond (within our RNA-seq environment)
+
+# conda activate RNA-seq 
+# conda install bioconda::diamond
+```
+
+What `BLASTP` does is that it spends time looks for a 3-sequential sequences somewhere in the file being queried that matches any reference database; this can end up taking a long time (up to hours!). `DIAMOND` bypasses this by having a function to compile an a index to sequence databases that allows for faster search. So next, we will make this index for each of our reference genomes; these will be saved as `.dmnd` files.
+
+We will make this index for the new (2025) genome. 
+
+```{r}
+# make index once 
+# generic format 
+  # diamond makedb --in newgenomeproteome.fasta -d newgenomeproteomedb
+# specific line (actually run - see 06_diamond.sh)
+  # diamond makedb --in /work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.pep -d Cvi_RU25proteome
+```
+
+Finally, using this created index, we can run a `DIAMOND` search. 
+
+```{r}
+# run search for each protein -- looking for every sequence in the index.dmnd file that has great similarity to the individual protein provided.  
+# genetic format 
+  # diamond blastp -q oldgenome.fa -db newgenomeproteomedb.dmnd -o old_to_new_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+# specific line (actually run - see 06_diamond.sh)
+  # diamond blastp -q /work/clh162/OysterRNA24/DESeq2/Cvi_3.0_GCF_002022765.2/protein.faa --db /work/clh162/OysterRNA24/DESeq2/Cvi_RU25proteome.dmnd -o old_to_new_diamond --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+```
+
+Looking at the output file, we will be primarily interested in a few reported results from the 12 tab output values: 
+
+* Tab 3: Sequence identity -- The % of amino acids identical between the querey sequence and the match sequence found within the database.dmnd file.
+* Tab 11: E score -- How likely are you to produce a hit of similar or better quality than the one produced here if you were to run this query search against random sequences. **Lower = better** 
+* Tab 12: Bit score -- Think of as the # of points scored by a homology search. **Higher = better**
+
+Q: What if `DIAMOND` returns more than one line for the `blastp` search?
+
+* If `DIAMOND` doesn't return anything, it would mean that there is no ortholog for that gene 
+
+* If `DIAMOND` returns more than one line, could be a sign of genome duplication, including the gene that is being queried against the database. 
+
+Now that we have gene annotation files from the `DIAMOND` program, we can carry out our **GO analysis**. 
+
+
+```{r}
+# Installing packages -- RUN THIS CODE CHUNK ONCE 
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(version = "3.20") #newest version is 3.23 but need to use 3.20 with R version 4.4
+```
+
+```{r}
+# Loading libraries 
+library(clusterProfiler)
+library(AnnotationDbi)
+```
+
+Let's focus on running our GO analysis only on a subset of significantly expressed genes. First to get the significantly differentially expressed genes, we can subset from our results dataframe from the dds. 
+
+```{r}
+sign_DEG <- na.omit(results)
+sign_DEG <- sign_DEG[sign_DEG$padj < 0.05 & sign_DEG$baseMean > 50] # need to decide what threshold values we want to use for defining significance
+```
+
+
+## GO analysis for positively differentially expressed genes that have a value above 0.5 for log2FoldChange 
+
+First, we can subset our significant DEG dataset (sign_DEG) to target this group. 
+
+```{r}
+sign_DEG[sign_DEG$log2FoldChange > 0.5, ]
+```
+
+Then we need to pull out a list of the gene names from this subset.
+
+```{r}
+rownames(sign_DEG[sign_DEG$log2FoldChange > 0.5, ])
+# save this list 
+list <- rownames(sign_DEG[sign_DEG$log2FoldChange > 0.5, ])
+```
+
+Using this list we can now run GO analysis
+
+```{r}
+GO_results <- clusterProfiler::enrichGO(genes = genes_to_test,
+                                        OrgDb = ,
+                                        keyType = )
+```
 
 
 
