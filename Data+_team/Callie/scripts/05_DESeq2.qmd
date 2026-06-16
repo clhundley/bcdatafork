@@ -20,6 +20,9 @@ library(lubridate)
 library(readxl)
 # BiocManager::install("DESeq2") # <- install only once!
 library(DESeq2)
+# install.packages("pheatmap")
+library(pheatmap)
+library(RColorBrewer)
 library(ggplot2)
 ```
 
@@ -57,12 +60,11 @@ colnames(counts_data) <- sub("(_Gill).*", "\\1", colnames(counts_data))
 colnames(counts_data)
 rownames(coldata)
 
-# make sure the row names in coldata matches column names in counts_data
+# make sure all the row names in coldata matches all the column names in counts_data
 all(rownames(coldata) %in% colnames(counts_data)) #TRUE
 
 # make sure these names are also in the same order 
 all(rownames(coldata) == colnames(counts_data)) #FALSE
-match(colnames(counts_data), rownames(coldata)) 
 
 # re-order 
 counts_data[ ,rownames(coldata)]#this line works, so let's save it now
@@ -120,30 +122,185 @@ dds
 
 #### Removing unexpresed genes 
 
-People will use different thresholds for this step, but let's remove genes that have fewer than 5 reads (this seems to be a very minimal threshold). 
+People will use different thresholds for this step, but let's remove genes that have fewer than 10 reads total (between all samples) (this seems to be a very minimal threshold). 
 
 ```{r}
-nrow(dds)
+nrow(dds) #28538 genes before filtering 
 
-# Remove genes/rows that do not have > 5 total counts 
-dds <- dds[rowSums(assay(dds, "counts")) > 5, ]
-nrow(dds)
+# Remove genes/rows that do not have > 10 counts in at least 9 (of the 18) samples   
+Groupsize <- 3
+keep <- rowSums(counts(dds) >= 10) >= Groupsize
+head(keep) # Boolean of either T (the gene has more than 10 reads in at least 9/18 samples) or F (it doesn't)
+dds_filtered <- dds[keep, ]
+nrow(dds_filtered) #21326 genes after filtering (got rid of ~7,000)
 ```
 
+#### Setting reference factor 
 
+```{r}
+dds_filtered$Location
+dds_filtered$Location <- relevel(dds_filtered$Location, ref = "CMT")
+# Another way to do this is with the factor() function - helpful if more than two levels for the variable you want to use as the factor  
+#dds_filtered$Location <- factor(dds_filtered$Location, levels = c("CMT","DAF"))
+```
+
+#### Collapse technical replicates
+
+If you have technical replicates (multiple samples collected from the same organism/timepoint), you need to fold them into one sample **before** running DESeq on the dds object. With this data, we don't have technical replicates, so we can move on to the next step. 
+
+Be careful to not confuse technical replicates with biological replicates -- you should **NEVER** collapse biological replicates! 
 
 
 ### 4. Run DESeq on dataset object 
 
+Now we are ready to run DESeq! Usually, people will save the results of DESeq back to the dds object name (to save space). Here, we aren't doing that because we have more space on the DCC and it is nice for reproducibility to practice these naming schemes. 
+
+The `DESeq()` function is a wrapper function that simplifies the process of differential expression analysis by combining multiple steps into a single call [Source](https://nf-co.re/rnaseq/dev/docs/usage/differential_expression_analysis/de_rstudio). It makes the pipeline more user-friendly and ensures that all necessary pre-processing and statistical steps are executed in the correct order. The key functions that DESeq2 calls include:
+
+* `estimateSizeFactors()`: to normalise the count data;
+* `estimateDispersion()`: to estimate the dispersion;
+* `nbinomWaldTest()`: to perform differential expression test.
+
 ```{r}
-dds <- DESeq(dds)
+# Run DESeq
+dds_results <- DESeq(dds_filtered)
 ```
 
-Analyzing results 
+#### Super quick look at results 
+
+The `results()` function contains a number of arguments to customize the results table which is generated. You can read about these arguments by looking up `?results`. By saving the results of our DESeq run, we can see the reported results values for each of our genes. 
+
+We can use the `summary()` function to get a general idea of up and down regulated genes in our samples.
 
 ```{r}
-results <- results(dds, contrast = c("condition", "S", "C"))
+# Save the results of DESeq 
+results <- results(dds_results)
+results
+
+# default 0.1 padj-based results 
+summary(results)
 ```
+
+Looking at the summary of our DESeq results, we can see that it uses a default padj value of `0.1`. We can change this by designating an alpha level in creating our results object: `alpha = #`.
+
+```{r}
+# 0.05 padj-based results 
+results0.05 <- results(dds_results, alpha = 0.05)
+summary(results0.05)
+```
+
+
+### 5. Perform Data quality assessment (i.e. quality control check)
+
+Running a QC check is important to ensure that the results data is set up well for exploratory analysis. This step should be run either before or in parallel to conducting differential gene expression testing (see below). The two main tools used to do this are **visualization** and **sample clustering**. 
+
+#### Transform data
+
+It is common to use a transformed format of the count data for QC analysis and there are two main options [Source](https://nf-co.re/rnaseq/dev/docs/usage/differential_expression_analysis/de_rstudio): `variance-stabilised (vst)` or `regularised log-transformed (rlog)` counts. Because `vst` is the computationally faster of the two, it is usually  preferred for use with larger datasets. Meanwhile, `rlog` is better able to withstand impacts of outliers. 
+
+Because we do not have many (any) outliers based on the super quick look we took at our results, let's use the `vst` option. Both of these transformation functions, `vst()` and `rlog()` have an argument blind, for whether the transformation should be blind to the sample information specified by the design formula. The default is `TRUE` and it should be used to compare samples in a manner wholly unbiased by the information about experimental groups.
+
+```{r}
+vst_results <- vst(dds_results, blind = TRUE)
+```
+
+#### Visualization: PCA plot 
+
+The first figure that is helpful to make in QC analysis of the data is a principle component analysis (PCA) plot. The function to do this `plotPCA()` will actually only accept a **transformed** dataset -- so it will throw an error if you try to pass it your `dds_results` object.  
+
+```{r, error = TRUE}
+# trying to run with dds_results obejct -- throws error. 
+plotPCA(dds_results, intgroup = "Location")
+```
+
+```{r}
+# Reminder of the names of group/factors in our sample metadata for graphing  
+colData(dds_results)
+
+# using vst transformed data:
+pca_plot_vst <- plotPCA(vst_results, intgroup = c("Location", "Month_collected"), ntop = 500) +
+  labs(title = "PCA of variance-stabilised (vst) transformed DESeq count data")
+pca_plot_vst
+
+# save the plot 
+ggsave("PCA_vst_data.png", plot = pca_plot_vst, path = "/work/clh162/OysterRNA24/DESeq2/Data_QC_assessment")
+```
+
+#### Sample clustering 
+
+The next thing we should do in our QC analysis is visualize the similarity between samples using hierarchical clustering. Hierarchical clustering involves grouping similar rows + columns of data to each other. So what we will do here is plot sample to sample distance.
+
+The `DESeq2` package does not have its own function for hierarchical clustering but we can use the `pheatmap()` function from the `pheatmap` package (loaded above). 
+
+First, use the `dist()` function on the transformed count matrix to get sample-to-sample distances.
+
+```{r}
+# Pull the matrix of vst-transformed counts from the vst_results object
+sampleDists <- dist(t(assay(vst_results)))  # Calculate pairwise distances between samples using the dist() function with Euclidean distance as the default method. By transposing the matrix with t(), we ensure that samples become rows and genes become columns, so that the dist function computes pairwise distances between samples.
+
+# Convert distances to a matrix
+sampleDistMatrix <- as.matrix(sampleDists)
+```
+
+Then visualize the sample-to-sample distances with a heatmap -- it'll give us an overview of similarities and dissimilarities between samples. You provide a hierarchical clustering to the heatmap function based on the sample distances, or else the heatmap function would calculate a clustering based on the distances between the rows/columns of the distance matrix.
+
+```{r}
+# Create a custom color palette for the heatmap -- using the RColorBrewer package (loaded above)
+colors <- colorRampPalette(rev(brewer.pal(9, "Greens")))(255)
+
+# Create heatmap
+hierarchical_clustering_plot <- pheatmap(sampleDistMatrix,
+                                         clustering_distance_rows = sampleDists,
+                                         clustering_distance_cols = sampleDists,
+                                         col = colors,
+                                         fontsize_col = 8,
+                                         fontsize_row = 8,
+                                         main = "Heatmap of hierarchical clustering of variance-stabilised (vst) transformed DESeq count data") 
+
+# save the plot 
+ggsave("hierarchical_clustering_vst_data.png", plot = hierarchical_clustering_plot, path = "/work/clh162/OysterRNA24/DESeq2/Data_QC_assessment")
+```
+
+
+### 6. Further exploration of DESeq results (back to count data)
+
+
+
+
+
+```{r}
+
+```
+
+#### Checking our contrasts
+
+If we had more than levels within our factor chosen to perform the DESeq by (here "Location"), we could also change which levels were being used for a direct comparison between these levels. An example is provided below.
+
+```{r}
+resultsNames(dds_results) #our design factor is Location
+# example scenario where we have a third Location (PHI) that we want to compare to our reference level (CMT)
+  # results(dds_results, contrast = c("Location", "PHI", "CMT"))
+```
+
+### 7. Visualizing differential gene expression results 
+
+As a reminder, in order to test for differential expression, we operate on **raw counts** and use discrete distributions. So to plot DGE data, we should are using raw counts that are the output of our `DESeq()` result object. 
+
+#### MA Plot 
+
+MA Plots are a scatterplot of log fold change against the mean of normalized counts. It can help us visualize the genes that are being differentially expressed. The blue points are the genes that are significantly differentially expressed. 
+
+The direction of the triangle shows the direction of the logfold change. Genes in the upper right and lower right corners would have high mean of normalized counts as well as extreme (either higher or lower) logfold changes and would be interesting genes to follow up on.  
+
+```{r}
+# default 0.1 padj-based results
+plotMA(results)
+# 0.05 padj-based results 
+plotMA(results0.05)
+```
+
+
+
 
 
 
