@@ -15,10 +15,10 @@ source /hpc/home/clh162/miniconda3/etc/profile.d/conda.sh
 conda activate RNA-seq
 
 ## Set paths ##
-OLD_PROTEOME=/work/clh162/OysterRNA24/DESeq2/Cvi_3.0_GCF_002022765.2/protein.faa
+OLD_PROTEOME=/work/clh162/OysterRNA24/DEG_analysis/DESeq2/Cvi_3.0_GCF_002022765.2/protein.faa
 NEW_PROTEOME=/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.pep
-DMND_DB=/work/clh162/OysterRNA24/DESeq2/Cvi_RU25proteome.dmnd
-DIR_OUT=/work/clh162/OysterRNA24/DESeq2/
+DMND_DB=/work/clh162/OysterRNA24/DEG_analysis/DESeq2/Cvi_RU25proteome.dmnd
+DIR_OUT=/work/clh162/OysterRNA24/DEG_analysis/DESeq2/
 
 ## Create diamond index using new proteome to blast against the old proteome ##
 diamond makedb \

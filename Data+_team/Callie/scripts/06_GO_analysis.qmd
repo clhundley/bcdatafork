@@ -47,7 +47,7 @@ Finally, using this created index, we can run a `DIAMOND` search.
 # genetic format 
   # diamond blastp -q oldgenome.fa -db newgenomeproteomedb.dmnd -o old_to_new_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
 # specific line (actually run - see 06_diamond.sh)
-  # diamond blastp -q /work/clh162/OysterRNA24/DESeq2/Cvi_3.0_GCF_002022765.2/protein.faa --db /work/clh162/OysterRNA24/DESeq2/Cvi_RU25proteome.dmnd -o old_to_new_diamond --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+  # diamond blastp -q /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_3.0_GCF_002022765.2/protein.faa --db /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU25proteome.dmnd -o old_to_new_diamond --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
 ```
 
 Looking at the output file, we will be primarily interested in a few reported results from the 12 tab output values: 
