@@ -9,12 +9,19 @@ format:
 editor: visual
 ---
 
+# Initial Packages 
+
+```{r}
+library(readr)
+library(dplyr)
+```
+
 
 # Gene ontology analysis 
 
-To conduct GO analysis we need a list of gene symbols, entrez ids, or ensembl ids. Depending on the type of information you have, you may need to convert this information into a different format. Gene annotation involves identifying information about the locations of genes along with their function, in addition to information about other genetic and noncoding features. 
+To conduct GO analysis we need a list of gene symbols, entrez ids, or ensembl ids to figure out what GO terms are associated with each gene. Depending on the type of information you have, you may need to convert this information into a different format. Gene annotation involves identifying information about the locations of genes along with their function, in addition to information about other genetic and noncoding features. 
 
-Because we do not have **gene annotations** (i.e. gene ids) for this new *C. virginica* genome, we need to create them. We can use the aligner `DIAMOND` to do this. `DIAMOND` is great because it allows you to run actual nucleotide/protein sequences against a database to find alignment/matches for annotations instead of just using standard gene IDs. `DIAMOND` is not the same as `BLASTP`; it does runs similar searches and returns similar files as `BLASTP`, but does it at a much faster rate!  
+Because we do not have **gene annotations** (i.e. gene ids) for this new *C. virginica* genome, we need to find the "best matches" of named genes in the old genome. We can use the aligner `DIAMOND` to do this. `DIAMOND` is great because it allows you to run actual nucleotide/protein sequences against a database to find alignment/matches for annotations instead of just using standard gene IDs. `DIAMOND` is not the same as `BLASTP`; it does runs similar searches and returns similar files as `BLASTP`, but does it at a much faster rate!  
 
 So let's run a search with `DIAMOND` (in terminal -- the code below is just for reference). 
 
@@ -28,26 +35,27 @@ First we need to install diamond:
 # conda install bioconda::diamond
 ```
 
-What `BLASTP` does is that it spends time looks for a 3-sequential sequences somewhere in the file being queried that matches any reference database; this can end up taking a long time (up to hours!). `DIAMOND` bypasses this by having a function to compile an a index to sequence databases that allows for faster search. So next, we will make this index for each of our reference genomes; these will be saved as `.dmnd` files.
+What `BLASTP` does is that it spends time looks for a 3-sequential (bp) sequences somewhere in the file being queried that matches any reference database; this can end up taking a long time (up to hours!). `DIAMOND` bypasses this by having a function to compile an a index to sequence databases that allows for faster search. So next, we will make this index for the old (already partially annotated) genome which we can then query our new genome against; these index files will be saved as `.dmnd` files.
 
-We will make this index for the new (2025) genome. 
+We will make this index for the old (Yale) genome using the `diamond makedb` command and a protein FASTA file (`.faa` works) from the old genome. What this command is doing is extracting the proteins, which will serve as our index database -- a db that will serve as a searchable reference for the genes in our new genome.   
 
 ```{r}
 # make index once 
 # generic format 
-  # diamond makedb --in newgenomeproteome.fasta -d newgenomeproteomedb
+  # diamond makedb --in old_genome_proteins.fasta -d old_genome_db
 # specific line (actually run - see 06_diamond.sh)
-  # diamond makedb --in /work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.pep -d Cvi_RU25proteome
+  # diamond makedb --in /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU17_ncbi_dataset/data/GCF_002022765.2/protein.faa -d /work/clh162/OysterRNA24/DEG_analysis/GO/diamond/Cvi_RU17_proteome
 ```
 
-Finally, using this created index, we can run a `DIAMOND` search. 
+Finally, using this created index, we can run a `diamond blastp` search. We are taking our new genome (protein file - not annotated) and create a list of predicted proteins (protein each one is most similar to) using the old genome protein database as a reference. The output of this command will give us a list that says something like "newgene1 is most similar to oldgene12" (with a list of metrics sharing how similar they are).
 
 ```{r}
-# run search for each protein -- looking for every sequence in the index.dmnd file that has great similarity to the individual protein provided.  
+# run search for each protein -- looking for every sequence in the index.dmnd file that has great similarity to the individual protein from our new genome provided.  
 # genetic format 
-  # diamond blastp -q oldgenome.fa -db newgenomeproteomedb.dmnd -o old_to_new_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+  # diamond blastp -q new_genome_proteins.faa -db old_genome_db.dmnd -o old_to_new_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+
 # specific line (actually run - see 06_diamond.sh)
-  # diamond blastp -q /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_3.0_GCF_002022765.2/protein.faa --db /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU25proteome.dmnd -o old_to_new_diamond --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+  # diamond blastp -q /work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.pep --db /work/clh162/OysterRNA24/DEG_analysis/GO/diamond/Cvi_RU17_proteome.dmnd -o /work/clh162/OysterRNA24/DEG_analysis/GO/diamond/RU17_to_RU25_diamond.tsv --evalue 1e-10 --max-target-seqs 1 --ultra-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
 ```
 
 Looking at the output file, we will be primarily interested in a few reported results from the 12 tab output values: 
@@ -60,23 +68,972 @@ Q: What if `DIAMOND` returns more than one line for the `blastp` search?
 
 * If `DIAMOND` doesn't return anything, it would mean that there is no ortholog for that gene 
 
-* If `DIAMOND` returns more than one line, could be a sign of genome duplication, including the gene that is being queried against the database. 
+* If `DIAMOND` returns more than one line, could be a sign of genome duplication, including the gene that is being queried against the database. However, we are controlling the number of matches returned in our code above to be just one gene from the old genome.
 
-Now that we have gene annotation files from the `DIAMOND` program, we can carry out our **GO analysis**. 
+However, if we look closely, this `diamond` search sometimes returned the same gene in the old genome to match with multiple genes in the new genome. We can control for this by limiting only ONE line be returned for each of our new genes -- we can specify that we want this one line to be the one with the lowest E-value (tab 11). <- **Need to find some way to actually do this!**
 
+```{r}
+# how to do this....
+  #6/30/26 skipped for now 
+
+```
+
+
+# Matching gene names 
+
+^ The work done below was run at the command line in the stated working directory
+
+The `RU17_to_RU25_diamond.tsv` file gives us an output that has our gene names (RU25 genome) and best-match (orthologs) proteins found in the old Rutgers genome (RU17). We have a file associated with the old genome (RU17) that contains these protein names and corresponding gene ID. So what we need to do is match our gene names to their best-match genes from the old genome by matching on the protein_ID that is present in both datasets. 
+
+First, we need a clean file that just has the old genome gene IDs and protein IDs. 
+
+```{r}
+# Working directory: /work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU17_ncbi_dataset/data/GCF_002022765.2
+
+# create file to hold stripped gene ID and protein ID information from the cds_from_genomic.fna in the 2017 RU
+  # touch Cvi_RU17_gene_proteinID.csv
+  # echo gene,protein_id > Cvi_RU17_gene_proteinID.csv
+
+# strip information and append to the .csv file
+  #awk '/^>/ {
+   # match($0, /\[gene=([^]]+)\]/, g)
+   # match($0, /\[protein_id=([^]]+)\]/, p)
+   # print g[1] "," p[1]
+#}' cds_from_genomic.fna >> Cvi_RU17_gene_proteinID.csv
+```
+
+Now that that is saved, we can load it in here:
+
+```{r}
+Cvi_RU17_gene_protein <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU17_ncbi_dataset/data/GCF_002022765.2/Cvi_RU17_gene_proteinID.csv")
+```
+
+Next we need to match these names using our diamond output file. This file was saved in `.tsv` format, and we can load it as a dataframe here!
+
+```{r}
+# Load diamond translation .tsv file 
+column_names <- c("RU25_gene", "protein_id", "pident", "length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore")
+
+RU17_to_RU25_diamond <- read_tsv("/work/clh162/OysterRNA24/DEG_analysis/GO/diamond/RU17_to_RU25_diamond.tsv", col_names = column_names)
+```
+
+Also, the names are slightly mis-matched from the gene names that would be found in our list of DEGs from the DESeq `results()` output. So we need to fix those names here as well. 
+
+```{r}
+library(stringr)
+
+# replace the '.model.' with '.TU.' to match our results file  
+RU17_to_RU25_diamond$RU25_gene <- str_replace(RU17_to_RU25_diamond$RU25_gene, "\\.model\\.", ".TU.")
+```
+
+
+We can join these two loaded data sets on the column of `protein_id` because they both have it.  
+
+```{r}
+# left join - pull evm gene ID over to the stripped Cvi_RU17_gene_protein dataset  
+left_join(x = RU17_to_RU25_diamond, # will return all our genes that found a match in the diamond search 
+          y = Cvi_RU17_gene_protein, # and their corresponding LOC gene ID names (ENSEMBL)
+          by = "protein_id",
+          )
+
+
+# Subset of this joined dataset that just has the matching gene IDs
+RU17_RU25_gene_IDs <- left_join(x = RU17_to_RU25_diamond, 
+                             y = Cvi_RU17_gene_protein,
+                             by = "protein_id",
+                             ) %>% 
+  select(RU25_gene, protein_id, gene)
+
+# Save this subset dataset for analysis of DEG results data
+write_csv(RU17_RU25_gene_IDs,
+          file = "RU17_RU25_gene_IDs",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/RU17_RU25_gene_IDs")
+```
+
+Now we have the list that helps us correspond the 2017 sequenced genome ENSEMBL gene names to the 2025 sequenced genome gene names. For each group of our DE analysis results that we want to run through GO, we can use this file to add the old ENSEMBL gene IDs into our `results()` output pre-GO analysis. With these ENSEMBL gene IDs assigned, we can pair corresponding GO terms to our DE genes!  
+
+
+Now that we have homologous gene IDs and information about the gene annotations from the `DIAMOND` program and gene name matching, we can carry out our **GO analysis**. 
+
+# GO analysis 
+
+Like for the other steps in our pipeline, there are a lot of different packages that can be used to conduct GO analysis. Here, we are going to try using the `goseq()` command from the ____ package. 
+
+First, let's load all the packages we need. 
 
 ```{r}
 # Installing packages -- RUN THIS CODE CHUNK ONCE 
-if (!require("BiocManager", quietly = TRUE))
+#if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
-BiocManager::install(version = "3.20") #newest version is 3.23 but need to use 3.20 with R version 4.4
+#BiocManager::install(version = "3.20") #newest version is 3.23 but need to use 3.20 with R version 4.4
+#library(BiocManager, lib.loc = "/usr/local/lib/R/site-library")
+
+# BiocManager::install("clusterProfiler")
+# BiocManager::install("biomaRt")
+# BiocManager::install("goseq")
 ```
+
+
 
 ```{r}
 # Loading libraries 
-library(clusterProfiler)
+install.packages("ggplot2", dependencies = TRUE)
+library(clusterProfiler) #built-in functions to generate various visualizations (incl. bubble plots, dot plots, enrichment maps)
 library(AnnotationDbi)
+# Packages below installed with BiocManager
+library(biomaRt)
+library(goseq)
 ```
+
+Was getting the following error when trying to load `biomaRt` so then ran the following code chunk to fix what appeared to be version mismatch of these packages: 
+
+**Error: package or namespace load failed for ‘biomaRt’:
+ object ‘filter_out’ is not exported by 'namespace:dplyr'**
+ 
+```{r}
+#remove.packages(c("dplyr", "dbplyr", "biomaRt"))
+#install.packages("dplyr")
+#BiocManager::install("biomaRt")
+```
+
+
+## DAF vs. CMT June
+
+Let's load + prepare to run our results of differential gene expression between Duke Aquafarm (DAF) and CMAST farm (CMT) in June through the GO enrichment analysis pipeline. 
+
+### Loading DESeq results + assigning old gene IDs 
+
+First we will load the saved results `.csv` file and add the gene name translation file to it via a join.  
+
+```{r}
+# results from June by site
+res_0.05_DAF_vs_CMT_June <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_DAF_vs_CMT_June")
+# check structure
+head(res_0.05_DAF_vs_CMT_June)
+
+# load old to new gene ID file for ENSEMBL ID communication
+RU17_RU25_gene_IDs <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/RU17_RU25_gene_IDs")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_DAF_vs_CMT_June <- left_join(x = res_0.05_DAF_vs_CMT_June,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_DAF_vs_CMT_June
+
+# how many of our DE genes don't have a homologous match (ENSEMBL ID) in the RU17 genome? 
+res_0.05_DAF_vs_CMT_June %>% filter(is.na(gene)) # 2,123
+# remove DE genes w/NA assignment in ENSEMBL_ID value 
+#res_0.05_DAF_vs_CMT_June <- res_0.05_DAF_vs_CMT_June %>% filter(!is.na(gene))
+  # brings us down to 19,203 DEGs with a "best match" to old genome 
+
+```
+
+Notice that there are a few (~2K) DEGs in this set that do not have a good match for a gene from the old Rutgers 2017 genome (have NAs in the gene column). 
+
+Now that we have all the packages that we need loaded and our DE data, we can start our GO analysis. Next, we need to get the GO terms associated with the DE genes in this group of results. However here we run into another issue since we are using a brand-new sequenced genome: it doesn't have GO terms assigned yet! So we either need to create them (using a program like `eggnog()`) or use published GO terms associated with an older genome. We will go with the latter and pair our gene_ids with GO terms from the Rutgers 2017 genome. We can do this by establishing a connection to the Ensembl website/database where they are published.
+ 
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# Establish connection to Ensembl Genes and the Rutgers 2017 genome dataset
+mart <- useMart("metazoa_mart", 
+                dataset = "cvgca002022765v4_eg_gene", # old genome name 
+                host = "https://metazoa.ensembl.org")
+
+# Pull the Gene ontology (GO) IDs associated with each gene in Rutgers 2017 genome dataset 
+attrs <- getBM(attributes = c("ensembl_gene_id", "transcript_length", "go_id", "namespace_1003"), 
+               mart = mart)
+
+# subset for list of the ensembl_gene_ids and go_ids for only the genes that have attributes listed (remove genes without go ids listed for them)
+gene2cat <- attrs[attrs$go_id != "", c("ensembl_gene_id", "go_id")]
+
+# get the length for each ensembl_gene_id (one row for each gene)
+gene_lengths <- aggregate(transcript_length ~ ensembl_gene_id, data = attrs, max)
+
+# how many ensembl_gene_ids genes in the gene_lengths dataset are represented in our DEG results?  
+gene_lengths %>% 
+  filter(ensembl_gene_id %in% res_0.05_DAF_vs_CMT_June$gene)
+  # 39,530 genes originally pulled from ENSEMBL, only 16,345 of them match to our DEG results 
+
+# put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+```
+
+Next, we need to put information about significance of our differentially expressed genes into binary format:
+
+```{r}
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_DAF_vs_CMT_June$padj < 0.05 &
+  !is.na(res_0.05_DAF_vs_CMT_June$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_DAF_vs_CMT_June$gene
+```
+
+In order to run `goseq()`, the gene length and differential expression vectors need to be the same length (i.e. one row in each vector for each gene). This step limits the rows in each vector to only include those genes that are present in both vectors. 
+
+```{r}
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+  # cut down from 21326 in DE_genes_vector and 39530 in lengths_vector to 16345 (the final # we expected from above)
+
+# Make sure our vector files are the same length: the vectors provided to the nullp() command need to have the same length 
+length(DE_genes_vector)
+length(lengths_vector)
+
+# another check: all names are the same 
+all(names(DE_genes_vector) == names(lengths_vector))
+
+# Final sanity check 
+stopifnot(length(DE_genes_vector) == length(lengths_vector))
+stopifnot(all(names(DE_genes_vector) == names(lengths_vector)))
+
+```
+
+### Investigation of differential expression + significance 
+
+Let's look at how many genes are differentially expressed. When Henry ran this he was using the shrinkage values way back during QC analysis of samples. 
+
+```{r}
+#How many genes are differentially expressed?
+attach(as.data.frame(LFC))
+#The total number of DEGs with an adjusted p-value<0.05
+summary(LFC, alpha=0.05)
+#The total number of DEGs with an adjusted p-value<0.05 AND absolute fold-change > 2
+sum(!is.na(padj) & padj < 0.05 & abs(log2FoldChange) >2)
+
+#Decreased expression:
+sum(!is.na(padj) & padj < 0.05 & log2FoldChange <0) #any fold-change
+sum(!is.na(padj) & padj < 0.05 & log2FoldChange <(-2)) #fold-change greater than 2
+#Increased expression
+sum(!is.na(padj) & padj < 0.05 & log2FoldChange >0) #any fold-change
+sum(!is.na(padj) & padj < 0.05 & log2FoldChange >2) #fold-change greater than 2
+```
+
+### Running goseq()
+
+Finally, we are prepared to run `goseq()`
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_DAF_vs_CMT_June",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June")
+```
+
+
+## DAF vs. CMT July 
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results from July by site
+res_0.05_DAF_vs_CMT_July <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_DAF_vs_CMT_July")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_DAF_vs_CMT_July <- left_join(x = res_0.05_DAF_vs_CMT_July,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_DAF_vs_CMT_July
+
+# how many of our DE genes don't have a homologous match (ENSEMBL ID) in the RU17 genome? 
+res_0.05_DAF_vs_CMT_July %>% filter(is.na(gene)) # still 2,123 genes don't have homologous match (ENSEMBL ID)
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# how many ensembl_gene_ids genes in the gene_lengths dataset are represented in our DEG results?  
+gene_lengths %>% 
+  filter(ensembl_gene_id %in% res_0.05_DAF_vs_CMT_July$gene)
+  # 39,530 genes originally pulled from ENSEMBL, still only 16,345 of them match to our DEG results 
+
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_DAF_vs_CMT_July$padj < 0.05 &
+  !is.na(res_0.05_DAF_vs_CMT_July$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_DAF_vs_CMT_July$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+  # cut down from 21326 in DE_genes_vector and 39530 in lengths_vector to 16345 (the final # we expected from above)
+
+# Make sure our vector files are the same length: the vectors provided to the nullp() command need to have the same length 
+length(DE_genes_vector)
+length(lengths_vector)
+
+# another check: all names are the same 
+all(names(DE_genes_vector) == names(lengths_vector))
+
+# Final sanity check 
+stopifnot(length(DE_genes_vector) == length(lengths_vector))
+stopifnot(all(names(DE_genes_vector) == names(lengths_vector)))
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_DAF_vs_CMT_July",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_July") 
+```
+
+
+## DAF vs. CMT August 
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results from August by site
+res_0.05_DAF_vs_CMT_August <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_DAF_vs_CMT_August")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_DAF_vs_CMT_August <- left_join(x = res_0.05_DAF_vs_CMT_August,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_DAF_vs_CMT_August
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_DAF_vs_CMT_August$padj < 0.05 &
+  !is.na(res_0.05_DAF_vs_CMT_August$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_DAF_vs_CMT_August$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+  # cut down from 21326 in DE_genes_vector and 39530 in lengths_vector to 16345 (the final # we expected from above)
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_DAF_vs_CMT_August",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_August") 
+```
+
+
+## DAF - July vs. June 
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between July and June (ref) at DAF
+res_0.05_July_vs_June_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_July_vs_June_DAF")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_July_vs_June_DAF <- left_join(x = res_0.05_July_vs_June_DAF,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_July_vs_June_DAF
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_July_vs_June_DAF$padj < 0.05 &
+  !is.na(res_0.05_July_vs_June_DAF$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_July_vs_June_DAF$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_July_vs_June_DAF",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_July_vs_June_DAF") 
+```
+
+
+## DAF - August vs. June 
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between August and June (ref) at DAF
+res_0.05_August_vs_June_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_August_vs_June_DAF")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_August_vs_June_DAF <- left_join(x = res_0.05_August_vs_June_DAF,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_August_vs_June_DAF
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_August_vs_June_DAF$padj < 0.05 &
+  !is.na(res_0.05_August_vs_June_DAF$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_August_vs_June_DAF$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_August_vs_June_DAF",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_June_DAF") 
+```
+
+
+## DAF - August vs. July 
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between August and July at DAF
+res_0.05_August_vs_July_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_August_vs_July_DAF")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_August_vs_July_DAF <- left_join(x = res_0.05_August_vs_July_DAF,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_August_vs_July_DAF
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_August_vs_July_DAF$padj < 0.05 &
+  !is.na(res_0.05_August_vs_July_DAF$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_August_vs_July_DAF$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_August_vs_July_DAF",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_July_DAF") 
+```
+
+
+## CMT - July vs. June
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between July and June (ref) at CMT
+res_0.05_July_vs_June_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_July_vs_June_CMT")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_July_vs_June_CMT <- left_join(x = res_0.05_July_vs_June_CMT,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_July_vs_June_CMT
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_July_vs_June_CMT$padj < 0.05 &
+  !is.na(res_0.05_July_vs_June_CMT$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_July_vs_June_CMT$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_July_vs_June_CMT",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_July_vs_June_CMT")  
+```
+
+
+## CMT - August vs. June
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between August and June (ref) at CMT
+res_0.05_August_vs_June_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_August_vs_June_CMT")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_August_vs_June_CMT <- left_join(x = res_0.05_August_vs_June_CMT,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_August_vs_June_CMT
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_August_vs_June_CMT$padj < 0.05 &
+  !is.na(res_0.05_August_vs_June_CMT$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_August_vs_June_CMT$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_August_vs_June_CMT",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_June_CMT") 
+```
+
+
+## CMT - August vs. July
+
+### Loading DESeq results + assigning old gene IDs 
+
+```{r}
+# results between August and July at CMT
+res_0.05_August_vs_July_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_August_vs_July_CMT")
+
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+res_0.05_August_vs_July_CMT <- left_join(x = res_0.05_August_vs_July_CMT,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_August_vs_July_CMT
+
+```
+
+### Connect GO terms using ENSEMBL gene IDs
+
+```{r}
+# RESETING LENGTHS_VECTOR with the original gene_lengths file 
+  # put length information into vector format  
+lengths_vector <- gene_lengths$transcript_length
+# add ensembl_gene_id names to the lengths data 
+names(lengths_vector) <- gene_lengths$ensembl_gene_id
+
+# Create DE gene vector where 1 = significant and 0 = not
+DE_genes_vector <- as.integer(
+  res_0.05_August_vs_July_CMT$padj < 0.05 &
+  !is.na(res_0.05_August_vs_July_CMT$padj) # exclude DE genes that do not have a padj value 
+)
+
+# add ensembl_gene_id names to the lengths data 
+names(DE_genes_vector) <- res_0.05_August_vs_July_CMT$gene
+
+
+
+# Now restrict vectors to overlap with this DESeq result universe:
+# create a list of common_genes shared between these two vectors 
+common_genes <- intersect(names(DE_genes_vector), names(lengths_vector))
+
+DE_genes_vector <- DE_genes_vector[common_genes]
+lengths_vector <- lengths_vector[common_genes]
+
+```
+
+### Investigation of differential expression + significance
+
+```{r}
+
+```
+
+### Running goseq()
+
+```{r}
+# account for the fact that longer genes are easier to sequence/detect
+pwf <- nullp(DEgenes = DE_genes_vector, bias.data = lengths_vector)
+
+# run goseq
+GO.wall <- goseq(pwf = pwf, 
+                 gene2cat = gene2cat,
+                 test.cats = ,
+                 use_genes_without_cat = FALSE)
+  # 3730 genes w/out GO terms -- excluded from p-value calculation
+  # 5501 GO terms (rows)
+
+# apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors)
+GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+
+# Filter for significant terms (e.g., padj < 0.05)
+enriched_GO <- GO.wall[GO.wall$padj < 0.05, ] # zero GO terms are significantly abundant 
+
+# save goseq() results to a .csv file 
+write_csv(GO.wall,
+          file = "GOres_0.05_August_vs_July_CMT",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_July_CMT") 
+
+# save significant GO terms to a .csv file 
+write_csv(enriched_GO,
+          file = "enriched_GO_0.05_August_vs_July_CMT",
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/enriched_GO_0.05_August_vs_July_CMT")
+```
+
+# Reading in results of goseq to dataframes 
+
+```{r}
+### Site comparisons at each timepoint ###
+# DAF vs. CMT June 
+GOres_0.05_DAF_vs_CMT_June <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June")
+# DAF vs. CMT July 
+GOres_0.05_DAF_vs_CMT_July <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_July")
+# DAF vs. CMT Aug 
+GOres_0.05_DAF_vs_CMT_August <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_August")
+
+### DAF timepoint comparisons ### 
+# DAF - July vs. June 
+GOres_0.05_July_vs_June_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_July_vs_June_DAF")
+# DAF - Aug vs. June
+GOres_0.05_August_vs_June_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_June_DAF")
+# DAF - Aug vs. July 
+GOres_0.05_August_vs_July_DAF <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_July_DAF")
+
+### CMT timepoint comparisons ###
+# CMT - July vs. June 
+GOres_0.05_July_vs_June_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_July_vs_June_CMT")
+# CMT - Aug vs. June
+GOres_0.05_August_vs_June_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_June_CMT")
+# CMT - Aug vs. July 
+GOres_0.05_August_vs_July_CMT <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_August_vs_July_CMT")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+# NOTHING BELOW THIS LINE RUN -- other potential pipeline(?)
 
 Let's focus on running our GO analysis only on a subset of significantly expressed genes. First to get the significantly differentially expressed genes, we can subset from our results dataframe from the dds. 
 
@@ -84,7 +1041,6 @@ Let's focus on running our GO analysis only on a subset of significantly express
 sign_DEG <- na.omit(results)
 sign_DEG <- sign_DEG[sign_DEG$padj < 0.05 & sign_DEG$baseMean > 50] # need to decide what threshold values we want to use for defining significance
 ```
-
 
 ## GO analysis for positively differentially expressed genes that have a value above 0.5 for log2FoldChange 
 
