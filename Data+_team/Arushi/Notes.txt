@@ -1,0 +1,76 @@
+01: RNA Sequencing 
+
+Gene Expression 
+
+Start with double stranded genomic DNA template (transcription is regulated by promoter regions) 
+Then splice to create a single stranded pre-MRNA 
+Introns separate from exons, splice them  
+Which then creates mature mRNA 
+Then export to cytoplasm which creates a protein (amino acid sequence) 
+Protein abundance estimation 
+Can’t go with this, its computationally expensive and not easy. High sample input requirements 
+So we use bulk RNA sequences instead, so we use mature mRNA sequences 
+Cannot do RNA directly so have to get the cDNA, converting it to cDNA, breaking it up and processing it in chunks. Hoping to infer based on these sequences 
+ 
+
+RNA Sequencing 
+
+Start with the samples (18 in our case) 
+Isolate RNAs 
+Then generate cDNA and fragment them, add linkers 
+Sequencing is done in a massive platform (ILLUMINA) 
+This creates short reads and sequenced in a pair 
+Produce millions of the sequenced fragments which then get fed into many downstream analysis 
+ 
+
+Challenges 
+
+Purity and quality, quantity can be an issue but not so much so with RNA sequencing 
+RNA is fragile compared to DNA 
+ 
+
+Metric/ Interpretation 
+
+RIN = RNA integrity number 
+0 bad to 10 (good) 
+Runs for about 5 minutes 
+ 
+
+ 
+
+Stranded vs Unstranded Data 
+
+How is the strand information encoded in your data 
+Data is stranded and it's on the positive/negative strand (output after the run) 
+ 
+
+Bulk vs Single cell RNA seq 
+
+Interested in cell type and what each of them are doing and behaving differently so choose a single cell in this case. Reveals heterogeneity 
+Single cell data is very sparse, massive matrix of the genes and very spread 
+Try both when you can since they both are complimentary 
+Low heterogeneity don't just do single cell 
+ 
+
+02: Alignment 
+
+Central to most genomic research 
+Intron: a non-coding segment of DNA located within a gene 
+Introns are copied into RNA and then cut out and discarded leaving only exon 
+There can be spaces in the alignment 
+ 
+
+RNA Mapping Strategies 
+
+De novo assembly 
+If reference genome doesn't exist 
+Align to transcriptome 
+If you have short reads 
+Align to references genome 
+Most common  
+Done in a splice aware manner 
+ 
+
+03: Abundance Estimation 
+
+Now that the RNA sequence has been compared to a genome sequence what do we do next? 
