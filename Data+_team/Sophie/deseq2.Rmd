@@ -1,0 +1,1049 @@
+# Importing Count Data
+
+```{r}
+# import libraries
+suppressPackageStartupMessages({
+  library(AnnotationDbi)
+  library(org.Mm.eg.db)
+  library(hgu95av2.db)
+  library(SummarizedExperiment)
+  library(GenomicRanges)
+  library(DESeq2)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(lubridate)
+  library(readxl)
+  library(dplyr)
+})
+```
+
+```{r}
+# reads csv data into a variable called counts and skips the first header line
+counts <- read.csv("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/gene_counts/gene_counts.csv", skip = 1, check.names = FALSE, row.names = 1)
+
+# remove the full path, .bam extension, and job id/array task id in the column names to just extract the sample names
+sample_names <- basename(colnames(counts)[6:ncol(counts)])
+sample_names <- sub("_sorted\\.bam", "", sample_names)
+sample_names <- sub("^(.*_Gill).*", "\\1", sample_names)
+colnames(counts)[6:ncol(counts)] <- sample_names
+
+# set the column names to just the sample names
+count_matrix <- counts[, 6:ncol(counts)]
+colnames(count_matrix)
+
+# gives number of rows and number of columns
+dim(count_matrix)
+
+# save count_matrix
+write.table(
+  count_matrix,
+  file = "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/gene_counts_clean.txt",
+  sep = "\t",
+  quote = FALSE,
+  row.names = TRUE,
+  col.names = NA
+)
+```
+
+```{r}
+# read in sample annotations and match the column names of the count matrix to the row names of the column data (make sure the sample names are the same and in the same positions)
+col_data <- read.csv("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/xRNA_clean.csv", row.names = 2) 
+col_data <- col_data[match(colnames(count_matrix), rownames(col_data)), ]
+
+# read in gene annotations
+gene_annotation_gtf <- read.delim("/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.gtf", comment.char = "#", header = FALSE, sep = "\t", quote = "")
+
+# name the columns and get gene_id from attribute column
+names(gene_annotation_gtf) <- c("seqname", "source", "feature", "start", "end", "score", "strand", "frame", "attribute")
+table(gene_annotation_gtf$feature)
+transcripts <- gene_annotation_gtf[gene_annotation_gtf$feature == "transcript",]
+transcripts$gene_id <- sub('.*gene_id "([^"]+)".*', '\\1', transcripts$attribute)
+head(transcripts$gene_id)
+
+# create gene annotation object
+row_ranges <- transcripts[, c("gene_id", "seqname", "start", "end", "strand", "feature", "attribute")]
+rownames(row_ranges) <- row_ranges$gene_id
+
+# match the row names of the count matrix to the row names of the row ranges
+row_ranges <- row_ranges[match(rownames(count_matrix), rownames(row_ranges)), ]
+```
+
+```{r}
+# make sure samples are in the same order
+all.equal(colnames(count_matrix), rownames(col_data))
+
+# make sure genes are in the same order
+all.equal(rownames(count_matrix), rownames(row_ranges))
+```
+
+```{r}
+# convert row_ranges data frame to GRanges object
+row_ranges <- GRanges(seqnames = row_ranges$seqname, 
+                      ranges = IRanges(
+                        start = row_ranges$start,
+                        end = row_ranges$end),
+                      strand = row_ranges$strand,
+                      gene_id = row_ranges$gene_id)
+```
+
+# Create SummarizedExperiment Object
+
+```{r}
+# create SummarizedExperiment object
+se <- SummarizedExperiment(assays = list(count_matrix = as.matrix(count_matrix)), 
+                            rowRanges = row_ranges,
+                            colData = col_data)
+```
+
+# Create DESeqDataSet Object
+
+```{r}
+# convert SummarizedExperiment object to DESeqDataSet object
+dds = DESeqDataSet(se, design = ~ Location)
+
+# remove rows with low gene counts (keep rows that have at least 10 reads total)
+keep <- rowSums(counts(dds) >= 10) >=3
+dds <- dds[keep,]
+
+# set the factor level, let DAF (Duke Aquafarm) be reference
+dds$Location = relevel(dds$Location, ref = "DAF")
+```
+
+# Run DESeq2
+
+```{r}
+dds <- DESeq(dds)
+results <- results(dds)
+
+# summary results
+summary(results)
+
+results0.01 <- results(dds, alpha = 0.01) # with smaller p-value
+summary(results0.01)
+
+# contrasts (find info about comparisons made)
+resultsNames(dds)
+```
+
+# MA Plot
+
+```{r}
+plotMA(results)
+```
+
+# PCA Plot
+
+```{r}
+# transform dds into varianced-stabilized dataset (vsd)
+vsd <- vst(dds, blind = FALSE)
+
+# plot
+pcaData <- plotPCA(vsd, intgroup = "Location", returnData = TRUE)
+ggplot(pcaData, 
+       aes(x = PC1, y = PC2, color = Location, label = name)) + geom_point(size = 3) + geom_text(vjust = -1, size = 2)
+```
+
+# Gene Expression Heatmap
+
+```{r}
+results_ordered <- results[order(results$padj), ]
+top_genes <- rownames(results_ordered)[1:50] # order results and get the top genes based on adjusted p-value (top 50 lowest p-values = top 50 most statistically significant genes)
+mat <- assay(vsd)[top_genes, ] # get expression values
+mat <- t(scale(t(mat))) # scale each gene
+heatmap_annotation <- HeatmapAnnotation(Location = colData(vsd)$Location)
+Heatmap(mat,
+        name = "Expression",
+        top_annotation = heatmap_annotation,
+        show_row_names = FALSE, # can change if want to see gene ids
+        cluster_rows = TRUE,
+        cluster_columns = TRUE)
+```
+
+# PCA plot also taking month into account
+```{r}
+# changes characters into dates
+col_data$Date_Collected <- dmy(col_data$Date_Collected)
+
+# creates month variable and makes it a column in col_data
+col_data$Month <- factor(
+  as.character(month(col_data$Date_Collected,
+                     label = TRUE,
+                     abbr = FALSE)),
+  levels = c("June", "July", "August"),
+  ordered = FALSE
+)
+
+colData(se)$Month <- col_data$Month
+
+colData(vsd)$Month <- col_data$Month
+
+# create PCA plot with month and location
+pcaData_month <- plotPCA(
+    vsd,
+    intgroup = c("Location", "Month"),
+    returnData = TRUE
+)
+
+ggplot(pcaData_month, 
+       aes(x = PC1, y = PC2, color = Month, shape = Location)) + geom_point(size = 3)
+```
+# Gene Expression Heatmap (each month per location)
+```{r}
+sample_order <- order(colData(vsd)$Location, colData(vsd)$Month)
+
+heatmap_annotation_month <- HeatmapAnnotation(
+  Month = colData(vsd)$Month[sample_order],
+  Location = colData(vsd)$Location[sample_order]
+)
+
+Heatmap(
+  mat[, sample_order],
+  name = "Expression",
+  top_annotation = heatmap_annotation_month,
+  show_row_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE
+)
+```
+# Gene Expression Heatmap (each location per month aka CMT vs. DAF for june, july, august)
+```{r}
+sample_order <- order(colData(vsd)$Month, colData(vsd)$Location)
+
+heatmap_annotation_month <- HeatmapAnnotation(
+  Month = colData(vsd)$Month[sample_order],
+  Location = colData(vsd)$Location[sample_order]
+)
+
+Heatmap(
+  mat[, sample_order],
+  name = "Expression",
+  top_annotation = heatmap_annotation_month,
+  show_row_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE
+)
+```
+
+# Create new DESeqDataSet object with month
+```{r}
+dds_time <- DESeqDataSet(
+    se,
+    design = ~ Location * Month
+)
+
+# set DAF as the reference
+dds_time$Location <- relevel(dds_time$Location, ref = "DAF")
+
+# create new object with likelihood ratio test (LRT) between simpler model (just location) and more complex model (location and month)
+#  dds_time <- DESeq(
+#     dds_time,
+#     test = "LRT",
+#     reduced = ~ Location
+# )
+
+# filter
+keep <- rowSums(counts(dds_time) >= 10) >=3
+dds_time <- dds_time[keep,]
+dds_time # 21981 genes
+
+# run DESeq2
+dds_time <- DESeq(dds_time)
+
+results_time <- results(dds_time)
+
+top_month_genes <- rownames(results_time)[order(results_time$padj)][1:12]
+
+vsd_time <- vst(dds_time, blind = FALSE)
+
+# fix months
+colData(vsd_time)$CollectionDate <- as.Date(col_data$Date_Collected)
+colData(vsd_time)$Month <- factor(
+  format(colData(vsd_time)$CollectionDate, "%B"),
+  levels = c("June", "July", "August")
+)
+
+plot_df <- data.frame(
+  Gene = rep(top_month_genes, times = ncol(vsd_time)),
+  Expression = as.vector(assay(vsd_time)[top_month_genes, ]),
+  Month = rep(colData(vsd_time)$Month, each = length(top_month_genes)),
+  Location = rep(colData(vsd_time)$Location, each = length(top_month_genes)),
+  Sample = rep(colnames(vsd_time), each = length(top_month_genes))
+)
+
+# faceted line plot for top twelve genes ordered by month/time
+ggplot(plot_df,
+       aes(x = Month,
+           y = Expression,
+           color = Location,
+           group = Location)) +
+  geom_point(alpha = 0.7, size = 2) +
+  stat_summary(fun = mean,
+               geom = "line",
+               linewidth = 1) +
+  stat_summary(fun = mean,
+               geom = "point",
+               size = 3) +
+  facet_wrap(~ Gene, scales = "free_y") +
+  theme_classic() +
+  labs(y = "VST-normalized expression",
+       x = "Month")
+```
+# PCA plot with Location * Month design
+```{r}
+# create PCA plot with month and location
+pcaData_location_month_design <- plotPCA(
+    vsd_time,
+    intgroup = c("Location", "Month"),
+    returnData = TRUE
+)
+
+ggplot(pcaData_location_month_design, 
+       aes(x = PC1, y = PC2, color = Month, shape = Location)) + geom_point(size = 3) + 
+  scale_color_manual(
+    values = c(
+      "June" = "red",
+      "July" = "forestgreen",
+      "August" = "blue"
+    )
+  )
+```
+
+# DESeq2 Results Subset by Month
+```{r}
+# june
+results_june <- results(
+  dds_time,
+  alpha = 0.05,
+  name = "Location_CMT_vs_DAF")
+
+# july
+results_july <- results(
+  dds_time,
+  alpha = 0.05,
+  contrast = list(
+    c("Location_CMT_vs_DAF", "LocationCMT.MonthJuly")
+  )
+)
+
+# august
+results_august <- results(
+  dds_time,
+  alpha = 0.05,
+  contrast = list(
+    c("Location_CMT_vs_DAF", "LocationCMT.MonthAugust")
+  )
+)
+```
+
+# Pairwise Comparison MA Plots (DAF vs. CMT for each month)
+```{r}
+# june
+plotMA(results_june, main = "CMT vs. DAF - June", ylim = c(-5, 5))
+
+# july
+plotMA(results_july, main = "CMT vs. DAF - July", ylim = c(-5, 5))
+
+# august
+plotMA(results_august, main = "CMT vs. DAF - August", ylim = c(-5, 5))
+
+# count significant genes per month (shows how much divergence exists between locations each month)
+sum(results_june$padj < 0.05, na.rm = TRUE)
+sum(results_july$padj < 0.05, na.rm = TRUE)
+sum(results_august$padj < 0.05, na.rm = TRUE)
+
+# determine if the different significant genes are consistent each month
+# get significant genes
+sig_june <- rownames(results_june)[which(results_june$padj < 0.05)]
+sig_july <- rownames(results_july)[which(results_july$padj < 0.05)]
+sig_august <- rownames(results_august)[which(results_august$padj < 0.05)]
+# count genes that are consistently significant across all three months
+length(Reduce(intersect,
+              list(sig_june, sig_july, sig_august)))
+
+Reduce(intersect,
+              list(sig_june, sig_july, sig_august))
+
+length(intersect(sig_june, sig_july))
+length(intersect(sig_june, sig_august))
+length(intersect(sig_july, sig_august))
+
+```
+
+# Pairwise Comparison Volcano Plots (DAF vs. CMT for each month)
+```{r}
+library(tibble)
+
+# volcano plot function
+plot_volcano <- function(res, title) {
+
+  df <- as.data.frame(res) %>%
+    rownames_to_column("gene_id")
+
+  df$Significant <- with(
+    df,
+    padj < 0.05 & abs(log2FoldChange) > 1
+  )
+  
+  label_genes <- df %>%
+  filter(
+    padj < 1e-7,
+    abs(log2FoldChange) > 2
+  )
+
+  ggplot(
+    df,
+    aes(
+      log2FoldChange,
+      -log10(padj),
+      color = Significant
+    )
+  ) +
+    geom_point(alpha = 0.7) +
+    geom_vline(
+      xintercept = c(-1, 1),
+      linetype = "dashed"
+    ) +
+    geom_hline(
+      yintercept = -log10(0.05),
+      linetype = "dashed"
+    ) +
+    scale_color_manual(
+      values = c("grey70", "red")
+    ) +
+    theme_classic() +
+    ggtitle(title) #+
+    #geom_text_repel(
+      #data = label_genes,
+      #aes(label = gene_id)
+    #)
+}
+
+# june
+plot_volcano(
+  results_june,
+  "CMT vs. DAF - June"
+)
+
+# july
+plot_volcano(
+  results_july,
+  "CMT vs. DAF - July"
+)
+
+# august
+plot_volcano(
+  results_august,
+  "CMT vs. DAF - August"
+)
+```
+
+# DESeq2 Results Subset by Location
+```{r}
+# DAF July vs. June
+results_daf_july_june <- results(
+  dds_time, 
+  alpha = 0.05,
+  name = "Month_July_vs_June"
+)
+
+# DAF August vs. June
+results_daf_august_june <- results(
+  dds_time, 
+  alpha = 0.05,
+  name = "Month_August_vs_June"
+)
+
+# DAF August vs. July
+results_daf_august_july <- results(
+  dds_time, 
+  alpha = 0.05,
+  contrast = list("Month_August_vs_June", "Month_July_vs_June")
+)
+
+# CMT July vs. June
+results_cmt_july_june <- results(
+  dds_time,
+  alpha = 0.05,
+  contrast = list(c("Month_July_vs_June", "LocationCMT.MonthJuly"))
+)
+
+# CMT August vs. June
+results_cmt_august_june <- results(
+  dds_time,
+  alpha = 0.05,
+  contrast = list(c("Month_August_vs_June", "LocationCMT.MonthAugust"))
+)
+
+# CMT August vs. July
+results_cmt_august_july <- results(
+  dds_time,
+  alpha = 0.05,
+  contrast = list(c("Month_August_vs_June", "LocationCMT.MonthAugust"), c("Month_July_vs_June", "LocationCMT.MonthJuly"))
+)
+```
+
+# Pairwise Comparison Volcano Plots (between each month per location)
+```{r}
+# DAF July vs. June
+plot_volcano(
+  results_daf_july_june,
+  "DAF - July vs. June"
+)
+
+# DAF August vs. July
+plot_volcano(
+  results_daf_august_july,
+  "DAF - August vs. July"
+)
+
+# DAF August vs. June
+plot_volcano(
+  results_daf_august_june,
+  "DAF - August vs. June"
+)
+```
+
+```{r}
+# CMT July vs. June
+plot_volcano(
+  results_cmt_july_june,
+  "CMT - July vs. June"
+)
+
+# CMT August vs. July
+plot_volcano(
+  results_cmt_august_july,
+  "CMT - August vs. July"
+)
+
+# CMT August vs. June
+plot_volcano(
+  results_cmt_august_june,
+  "CMT - August vs. June"
+)
+
+
+```
+
+
+# Generate lists of total significant upregulated and downregulated gene ids
+```{r}
+# NOTE: I am defining "significant" as padj < 0.05 and absolute value of log2FoldChange > 0
+
+results_df <- as.data.frame(results)
+
+# get list of upregulated gene ids
+upregulated_genes <- subset(results_df, padj < 0.05 & log2FoldChange > 0)
+upregulated_gene_ids <- rownames(upregulated_genes)
+upregulated_gene_ids
+
+# get list of downregulated gene ids
+downregulated_genes <- subset(results_df, padj < 0.05 & log2FoldChange < 0)
+downregulated_gene_ids <- rownames(downregulated_genes)
+downregulated_gene_ids
+```
+
+# Counting upregulated and downregulated genes for each location and month
+```{r}
+# NOTE: upregulated means more expressed in CMT than DAF and downregulated means less expressed in CMT than DAF (aka more expressed in DAF than CMT)
+# june
+upregulated_june_counts <- sum(
+  results_june$padj < 0.05 &
+    results_june$log2FoldChange > 0,
+  na.rm = TRUE
+)
+
+downregulated_june_counts <- sum(
+  results_june$padj < 0.05 &
+    results_june$log2FoldChange < 0,
+  na.rm = TRUE
+)
+
+# july
+upregulated_july_counts <- sum(
+  results_july$padj < 0.05 &
+    results_july$log2FoldChange > 0,
+  na.rm = TRUE
+)
+
+downregulated_july_counts <- sum(
+  results_july$padj < 0.05 &
+    results_july$log2FoldChange < 0,
+  na.rm = TRUE
+)
+
+# august
+upregulated_august_counts <- sum(
+  results_august$padj < 0.05 &
+    results_august$log2FoldChange > 0,
+  na.rm = TRUE
+)
+
+downregulated_august_counts <- sum(
+  results_august$padj < 0.05 &
+    results_august$log2FoldChange < 0,
+  na.rm = TRUE
+)
+
+# put counts into table
+table <- data.frame(
+  Month = c("June", "July", "August"),
+  Up_in_CMT = c(upregulated_june_counts, upregulated_july_counts, upregulated_august_counts),
+  Up_in_DAF = c(downregulated_june_counts, downregulated_july_counts, downregulated_august_counts)
+)
+table
+```
+
+# Generate lists of significant upregulated and downregulated gene ids per month
+```{r}
+# june
+upregulated_june_gene_ids <- rownames(results_june)[
+  !is.na(results_june$padj) & # excludes the genes with NA padj values
+    results_june$padj < 0.05 & 
+    results_june$log2FoldChange > 0
+]
+
+downregulated_june_gene_ids <- rownames(results_june)[
+  !is.na(results_june$padj) & # excludes the genes with NA padj values
+    results_june$padj < 0.05 & 
+    results_june$log2FoldChange < 0
+]
+
+upregulated_june_gene_ids
+downregulated_june_gene_ids
+
+# july
+upregulated_july_gene_ids <- rownames(results_july)[
+  !is.na(results_july$padj) & # excludes the genes with NA padj values
+    results_july$padj < 0.05 & 
+    results_july$log2FoldChange > 0
+]
+
+downregulated_july_gene_ids <- rownames(results_july)[
+  !is.na(results_july$padj) & # excludes the genes with NA padj values
+    results_july$padj < 0.05 & 
+    results_july$log2FoldChange < 0
+]
+
+upregulated_july_gene_ids
+downregulated_july_gene_ids
+
+# august
+upregulated_august_gene_ids <- rownames(results_august)[
+  !is.na(results_august$padj) & # excludes the genes with NA padj values
+    results_august$padj < 0.05 & 
+    results_august$log2FoldChange > 0
+]
+
+downregulated_august_gene_ids <- rownames(results_august)[
+  !is.na(results_august$padj) & # excludes the genes with NA padj values
+    results_august$padj < 0.05 & 
+    results_august$log2FoldChange < 0
+]
+
+upregulated_august_gene_ids
+downregulated_august_gene_ids
+```
+
+# Environmental Data
+```{r}
+# load in all environmental data files for summer 2024
+ph <- read_excel("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/pH_2024.xlsx")
+salinity <- read_excel("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Salinity_2024.xlsx")
+do <- read_excel("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/DOsensor_2024.xlsx")
+precip <- read_excel("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Precip_2024.xlsx")
+
+# standardize dates
+ph$DateTime <- as.Date(ph$DateTime)
+salinity$DateTime <- as.Date(salinity$DateTime)
+do$DateTime <- as.Date(do$DateTime)
+precip$DateTime <- as.Date(precip$DateTime)
+
+# create variable for sample collection dates
+col_data$CollectionDate <- as.Date(col_data$Date_Collected)
+```
+
+# Salinity
+```{r}
+# calculate 7-day average for the 7 days before the collection dates
+salinity <- salinity %>%
+  mutate(Farm = recode(Farm, "DUML" = "DAF", "CMAST" = "CMT"))
+
+salinity_avg <- salinity %>%
+  group_by(Farm) %>%
+  group_modify(~{
+    sample_dates <- sort(unique(
+      col_data$CollectionDate[col_data$Location == .y$Farm]
+    ))
+    data.frame(
+      CollectionDate = sample_dates,
+      Salinity_7d_Avg = sapply(
+        sample_dates, 
+        function(date){
+          mean(.x$Sal_ppt[.x$DateTime >= date - 7 & .x$DateTime <= date], na.rm = TRUE)
+        }
+      )
+    )
+  }) %>%
+  ungroup() %>%
+  rename(Location = Farm)
+
+
+salinity_avg
+
+# add to environmental data table
+env_data <- left_join(
+  col_data,
+  salinity_avg,
+  by = c("Location", "CollectionDate"))
+
+# calculate correlation coefficients
+salinity_correlation <- sapply(
+  top_month_genes,
+  function(gene)
+    cor(
+      assay(vsd_time)[gene, ],
+      env_data$Salinity_7d_Avg,
+      method = "spearman"
+    )
+)
+salinity_correlation
+
+# create PCA plot for salinity and location
+pcaData$Salinity <- env_data$Salinity_7d_Avg
+pcaData$Location <- env_data$Location
+
+ggplot(
+  pcaData,
+  aes(
+    PC1,
+    PC2,
+    color = Salinity,
+    shape = Location
+  )
+) +
+  geom_point(size = 4) +
+  theme_classic()
+```
+
+# Temperature
+```{r}
+# calculate 7-day average for the 7 days before the collection dates
+temp_avg <- salinity %>%
+  group_by(Farm) %>%
+  group_modify(~{
+    sample_dates <- sort(unique(
+      col_data$CollectionDate[col_data$Location == .y$Farm]
+    ))
+    data.frame(
+      CollectionDate = sample_dates,
+      Temp_7d_Avg = sapply(
+        sample_dates, 
+        function(date){
+          mean(.x$Temp_C[.x$DateTime >= date - 7 & .x$DateTime <= date], na.rm = TRUE)
+        }
+      )
+    )
+  }) %>%
+  ungroup() %>%
+  rename(Location = Farm)
+
+# temp_avg$Location <- recode(
+#   temp_avg$Farm, "DUML" = "DAF", "CMAST" = "CMT"
+# )
+
+# create environmental data table
+env_data <- left_join(
+  env_data,
+  temp_avg,
+  by = c("Location", "CollectionDate"))
+
+# calculate correlation coefficients
+temp_correlation <- sapply(
+  top_month_genes,
+  function(gene)
+    cor(
+      assay(vsd_time)[gene, ],
+      env_data$Temp_7d_Avg,
+      method = "spearman"
+    )
+)
+temp_correlation
+
+# create PCA plot for temperature and location
+pcaData$Temp <- env_data$Temp_7d_Avg
+pcaData$Location <- env_data$Location
+
+ggplot(
+  pcaData,
+  aes(
+    PC1,
+    PC2,
+    color = Temp,
+    shape = Location
+  )
+) +
+  geom_point(size = 4) +
+  theme_classic()
+```
+
+# pH
+```{r}
+# calculate 7-day average for the 7 days before the collection dates
+ph <- ph %>%
+  mutate(Farm = recode(Farm, "DUML" = "DAF", "CMAST" = "CMT"))
+
+ph_avg <- ph %>%
+  group_by(Farm) %>%
+  group_modify(~{
+    sample_dates <- sort(unique(
+      col_data$CollectionDate[col_data$Location == .y$Farm]
+    ))
+    data.frame(
+      CollectionDate = sample_dates,
+      pH_7d_Avg = sapply(
+        sample_dates, 
+        function(date){
+          mean(.x$pH[.x$DateTime >= date - 7 & .x$DateTime <= date], na.rm = TRUE)
+        }
+      )
+    )
+  }) %>%
+  ungroup() %>%
+  rename(Location = Farm)
+
+ph_avg
+
+# add to environmental data table
+env_data <- left_join(
+  env_data,
+  ph_avg,
+  by = c("Location", "CollectionDate"))
+
+# calculate correlation coefficients
+ph_correlation <- sapply(
+  top_month_genes,
+  function(gene)
+    cor(
+      assay(vsd_time)[gene, ],
+      env_data$pH_7d_Avg,
+      method = "spearman",
+      use = "complete.obs"
+    )
+)
+ph_correlation
+
+# create PCA plot for ph and location
+pcaData$pH <- env_data$pH_7d_Avg
+pcaData$Location <- env_data$Location
+
+ggplot(
+  pcaData,
+  aes(
+    PC1,
+    PC2,
+    color = pH,
+    shape = Location
+  )
+) +
+  geom_point(size = 4) +
+  theme_classic()
+```
+# Dissolved Oxygen
+```{r}
+# calculate 7-day average for the 7 days before the collection dates
+do <- do %>%
+  mutate(Farm = recode(Farm, "DUML" = "DAF", "CMAST" = "CMT"))
+
+do_avg <- do %>%
+  group_by(Farm) %>%
+  group_modify(~{
+    sample_dates <- sort(unique(
+      col_data$CollectionDate[col_data$Location == .y$Farm]
+    ))
+    data.frame(
+      CollectionDate = sample_dates,
+      DO_7d_Avg = sapply(
+        sample_dates, 
+        function(date){
+          mean(.x$DomgL[.x$DateTime >= date - 7 & .x$DateTime <= date], na.rm = TRUE)
+        }
+      )
+    )
+  }) %>%
+  ungroup() %>%
+  rename(Location = Farm)
+
+do_avg
+
+# add to environmental data table
+env_data <- left_join(
+  env_data,
+  do_avg,
+  by = c("Location", "CollectionDate"))
+
+# calculate correlation coefficients
+do_correlation <- sapply(
+  top_month_genes,
+  function(gene)
+    cor(
+      assay(vsd_time)[gene, ],
+      env_data$DO_7d_Avg,
+      method = "spearman",
+      use = "complete.obs"
+    )
+)
+all(colnames(vsd_time) == env_data$Sample)
+do_correlation
+
+# create PCA plot for dissolved oxygen and location
+pcaData$DO <- env_data$DO_7d_Avg
+pcaData$Location <- env_data$Location
+
+ggplot(
+  pcaData,
+  aes(
+    PC1,
+    PC2,
+    color = DO,
+    shape = Location
+  )
+) +
+  geom_point(size = 4) +
+  theme_classic()
+```
+
+# Environmental Data Correlations
+```{r}
+# table of correlation coefficients for environmental variables
+correlation_table <- data.frame(
+  Gene = names(temp_correlation),
+  Temperature = temp_correlation,
+  Salinity = salinity_correlation,
+  DO = do_correlation,
+  pH = ph_correlation,
+  row.names = NULL
+)
+correlation_table
+```
+# Further Environmental Data Analysis - Temperature 
+```{r}
+# I am choosing to graph gene expression and temperature vs month on the same plot for the gene with the highest correlation coefficient (evm.TU.Chr04.3052)
+gene <- "evm.TU.Chr04.3052"
+
+plot_df <- data.frame(
+  Date = env_data$CollectionDate,
+  Location = env_data$Location,
+  Expression = assay(vsd_time)[gene, ],
+  Temperature = env_data$Temp_7d_Avg
+)
+
+ggplot(plot_df, aes(Date, color = Location)) +
+  geom_point(aes(y = Expression), size = 3) +
+  stat_summary(
+    aes(y = Expression, group = Location, linetype = "Gene Expression"),
+    fun = mean,
+    geom = "line",
+    linewidth = 1
+  ) +
+  geom_line(
+    aes(y = Temperature, group = interaction(Location, "Temperature"), linetype = "Temperature"),
+    linewidth = 1
+  ) +
+  geom_point(
+    aes(y = Temperature),
+    size = 3
+  ) +
+  scale_linetype_manual(
+    name = "Variable",
+    values = c(
+      "Gene Expression" = "solid",
+      "Temperature" = "twodash"
+    )
+  ) +
+  theme_classic() +
+  labs(
+    y = "Value",
+    title = gene
+  )
+```
+
+# Further Environmental Data Analysis - Dissolved Oxygen
+```{r}
+# I am choosing to graph gene expression and temperature vs month on the same plot for the gene with the highest correlation coefficient (evm.TU.Chr04.3052)
+gene <- "evm.TU.Chr04.3052"
+
+plot_df <- data.frame(
+  Date = env_data$CollectionDate,
+  Location = env_data$Location,
+  Expression = assay(vsd_time)[gene, ],
+  DO = env_data$DO_7d_Avg
+)
+
+ggplot(plot_df, aes(Date, color = Location)) +
+  geom_point(aes(y = Expression), size = 3) +
+  stat_summary(
+    aes(y = Expression, group = Location, linetype = "Gene Expression"),
+    fun = mean,
+    geom = "line",
+    linewidth = 1
+  ) +
+  geom_line(
+    aes(y = DO, group = interaction(Location, "DO"), linetype = "DO"),
+    linewidth = 1
+  ) +
+  geom_point(
+    aes(y = DO),
+    size = 3
+  ) +
+  scale_linetype_manual(
+    name = "Variable",
+    values = c(
+      "Gene Expression" = "solid",
+      "DO" = "twodash"
+    )
+  ) +
+  theme_classic() +
+  labs(
+    y = "Value",
+    title = gene
+  )
+```
+
+# Environmental Variables Correlation Matrix
+```{r}
+# create matrix of just environmental data
+env_mat <- env_data[, c("Temp_7d_Avg", "Salinity_7d_Avg", "DO_7d_Avg", "pH_7d_Avg")]
+rownames(env_mat) <- rownames(col_data)
+
+correlation_matrix <- cor(env_mat, method = "spearman", use = "complete.obs")
+correlation_matrix
+```
+# Saving the Objects
+```{r}
+# save SummarizedExperiment
+saveRDS(se, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/summarized_experiment.rds")
+
+# save DESeqDataSet object
+saveRDS(dds, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/dds_object.rds")
+saveRDS(dds_time, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/dds_time.rds")
+
+# save column data
+saveRDS(col_data, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/col_data.rds")
+
+# save environmental data matrix
+saveRDS(env_mat, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/env_mat.rds")
+
+# save pairwise comparisons results (between each location per month)
+saveRDS(results_june, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_june.rds")
+saveRDS(results_july, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_july.rds")
+saveRDS(results_august, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_august.rds")
+
+# save pairwise comparisons (between each month per location)
+saveRDS(results_daf_july_june, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_daf_july_june.rds")
+saveRDS(results_daf_august_june, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_daf_august_june.rds")
+saveRDS(results_daf_august_july, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_daf_august_july.rds")
+saveRDS(results_cmt_july_june, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_cmt_july_june.rds")
+saveRDS(results_cmt_august_june, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_cmt_august_june.rds")
+saveRDS(results_cmt_august_july, "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_cmt_august_july.rds")
+```

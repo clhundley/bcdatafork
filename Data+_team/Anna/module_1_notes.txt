@@ -1,0 +1,116 @@
+Introduction to RNAseq
+* Process
+   * Extract, clean (poly-A tails with cap)
+   * Convert to cDNA
+   * Split cDNA into smaller fragments
+   * The machine (Illumina) reads the fragments
+      * A single sequenced fragment = “a read”
+* Divisions
+   * One lane can generate ~ 200 million reads (only need 25 million reads)
+   * Multiplexing - attach unique DNA barcode (tag) to each sample, then mix up to 8 samples to run them in a single lane, then uses a computer to sort them back out by their barcodes
+* Matching Reads
+   * Mapping : matching the reads to the genes
+   * End result: generates an expression matrix (giant spreadsheet)
+      * Rows = genes (features)
+      * Columns = samples
+      * Inside values = exact count of # times the gene was spotted
+   * DO NOT CONVERT TAW COUNTS INTO PERCENTAGES OR RATIOS (CPM or RPKM) BEFORE DOING STATISTICAL ANALYSIS
+   * Total pool of RNA that gets sequenced: RNA library
+   * Library size - the total number of successfully mapped
+________________
+
+
+Sequence Formats
+1. FASTQ
+   1. An extension of FASTA
+   2. Stores: 
+      1. Biological sequences
+      2. Their corresponding quality scores
+   3. Typical 4 lines per sequence:
+      1. A line starting with “@” followed by a sequence identifier and optional description
+      2. The raw sequence letters
+      3. A line starting with “+” sometimes followed by the same comment as the first line
+      4. A line encoding the quality values for sequence in line 2
+         1. Same numbers of symbol as letters in sequence
+  
+
+   4. 2. FASTA
+   1. Text-based format that represents nucleotide sequences or amino acid
+   2. If a FASTA file contains multiple sequence = “multi-FASTA” file
+   3. Each entry begins with “>” followed by a comment describing the sequence on the same line.
+   4. Actual sequence begins on the line after the comment
+  
+
+3. SAM 
+   1. Sequence Alignment/Map (SAM)
+   2. Supports single- and paired-end reads produced by different sequencing platforms
+   3. Headings begins with “@”; 11 mandatory fields
+4. BAM
+   1. A binary representation of SAM
+RNAseq 02: Alignment
+Critical Steps: 
+Phase 0: data into FASTQ format
+   * Align to genome
+* Phase 1: Quality Control
+   * Exploratory phase: find peaks, quantify transcripts, find SVs…
+* Phase 2-100: Analysis, interpretation, discovery
+RNA-seq Mapping Strategies
+* Align to reference genome
+   * All other cases
+   * Does not rely on known transcripts - allows for discovery
+* DNA alignment (BWAM)
+* RNA alignment (HISAT2, STAR)
+* Unless reads are short, one should use splice-aware aligner
+   * 1. Global search until exactly one match of at least 28bp
+   * 2. Extend until mismatch at 51bp (faster)
+   * 3. Switch to local FM index to align first 8bp of remaining read
+   * 4. Extend again
+   * 5. Check for compatibility and combine into single spliced alignment
+1. SAM file explained
+   1. 12 bitwise flags describing the alignment
+      1. #2 : FLAG: 1 indicates the flag is set (check bit description)
+      2. #6 :CIGAR: (Compact Idiosyncratic Gapped Alignment Report)
+         1. A sequence of base lengths and associated “operations” indicating which bases align to the reference w/ alterations
+2. CRAM files
+   1. Ultra-compressed version of a BAM file
+   2. Stores “diffs” from reference genome/ base quality binning (eg. 10-19=15)
+3. BAM files sorting
+   1. Sorted by position/ certain tools require BAM sorted by read name
+Parsimony - representing variant in as few nucleotides as possible w/o reducing the length of any allele o 0
+Left (right) aligning - shifting the start position of a variant as far to left (right) as possible
+________________
+
+
+RNAseq 03: Abundance Estimation and Differential Expression
+* RPKM: reads per Kilobase of transcript per Million mapped reads
+* FPKM: Fragments per Kilobase of transcript per Million mapped reads
+   * Attempts to normalize for gene size and library depth
+* StringTie: Map reads to the genome
+   * 1. Extract heaviest path from a splice graph
+   * 2. Construct a flow network
+   * 3. Compute maximum flow to estimate abundance
+   * 4. Update the splice graph
+   * 5. Repeats until all reads have been assigned
+
+
+Differential Expression
+* Tying gene expression back to genotype/phenotype
+   * Assess higher/lower level in gene expression in different groups of samples
+   * Eg. (tumor vs. normal tissue), (wild-type vs. gene KO cells)
+* W/ Ballgown
+   * Parametric F-test comparing nested linear models
+   * Two models fit to each feature, use gene expression as the outcome
+   * An F statistic and p-value are calculated using fits of the 2 models
+      * A sig p-value meant the model including covariate of interest fits significantly better than the model w/o covariate = 
+DIFFERENTIAL EXPRESSION
+        Adjust for multiple testing by reporting q-values
+* Q < 0.05, the false discovery rate should be controlled at ~5%
+* Multiple Testing Correction
+   * More test, more differences solely due to chance
+  
+
+Biowulf Introduction
+1. High performance cluster (HPC)
+   1. A collection of computers that are networked together, allow computing tasks to be run faster through coordinated software running. 
+SLURM = Simple Linux Utility for Resource Management
+* Biowulf: NIH’s HPC

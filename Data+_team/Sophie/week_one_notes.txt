@@ -1,0 +1,81 @@
+01: Introduction to RNA Sequencing
+* most sequencing platforms are not capable of sequencing RNA directly —> have to convert to cDNA
+* break cDNA into pieces and sequence little chunks
+* **what are reads in RNA-seq?
+   * mRNA broken into smaller, manageable fragments —> sequencing machine “reads” the bases of the fragments and outputs data files filled with these short sequences
+   * paired reads: sequencer reads from boths ends of the same fragment which provides better data for identifying alternative splicing or gene fusions
+* ‘RIN’ = RNA integrity number 
+   * 0 (bad) to 10 (good)
+   * numerical estimate of how intact the RNA is
+* stranded data: preserves original direction of transcription, letting you know which DNA strand an RNA molecule came from
+* unstranded data: original strand orientation is lost, so you cannot tell which strand was transcribed
+* “coverage” in bulk-RNAseq
+   * 30 million reads is sufficient for gene abundance estimation
+* common analysis goals of RNA-seq analysis
+   * gene expression and differential expression
+   * alternative expression analysis
+   * transcript discovery adn annotation
+   * allele specific expression
+   * mutation discovery
+   * fusion detection
+   * RNA editing
+* RNA-seq workflows
+   * obtain raw data
+   * align/assemble reads
+   * process alignment with tool specific to goal
+   * post process (import into downstream software like R, Matlab, etc)
+   * summarize and visualize
+
+02: Alignment
+* process of matching individual reads into the correct part of the reference genome
+   * imperfections in how the read compares to the reference can indicate a variant
+* exons: coding sequences of a gene that remain in mature RNA and code for proteins
+* exon-exon junction: specific point where two distinct exons are stitched together after non-coding introns are removed during RNA splicing
+   * might be large gaps in alignments if read happens to span exon-exon junctions
+* introns: non-coding sequences that are removed during RNA-seq because they do not contain the instructions needed to build a protein
+* genome: complete set of DNA in an organism
+* transcriptome: complete set of RNA molecules transcribed from DNA
+* three alignment strategies
+   * de novo assembly (if reference genome does not exist for the species being studied)
+   * align to transcriptome (if you have short reads, relies on known transcripts)
+   * align to reference genome (all other cases, does not rely on known transcripts)
+* HISAT (Hierarchical Indexing for Spliced Alignments of Transcripts): splice-aware RNA-seq read aligner
+   * requires reference genome
+   * output: SAM/BAM file
+* HISAT algorithm
+   * find candidate locations across whole genome that map to part of each read
+   * do local alignment for each candidate to align remainder of the read
+* SAM/BAM format
+   * SAM: sequence alignment/map format, uncompressed text data
+   * BAM: binary version of SAM file, compressed version of SAM, indexed
+* SAM/BAM header section
+   * @HD header line
+   * @RG read group
+   * @SQ reference sequence dictionary
+   * @PG program
+* SAM/BAM flags: 12 bitwise flags describing alignment
+* CIGAR string: sequence of base lengths and associated operations indicating which bases align to the reference, are deleted, inserted, represent introns, etc
+* CRAM: ultra-compressed version of BAM file, stores “diffs” from reference genome
+* BED format
+   * first three fields always required: chr (chromosome), start, stop
+* variant shifting (alignment)
+   * left/right aligning: shifting the start position variant as far to the left/right as possible
+   * parsimony: representing variant in as few nucleotides as possible without reducing the length of any allele to 0
+
+03: Abundance Estimation and Differential Expression
+* RPKM: reads per kilobase of transcript per million mapped reads
+* FPKM: fragments per kilobase of transcript per million mapped reads
+   * better describes paired-end reads
+   * C = number of mappable fragments for a gene (transcript)
+   * N = total number of mappable fragments in the library
+   * L = number of base pairs in the gene (transcript) 
+   * FPKM = (C / (N x L)) x 1000 x 1000000
+* TPM: transcript per kilobase million
+   * sum of all TPM in samples is the same
+* raw read counts for differential expression analysis: assign reads/fragments to defined genes/transcripts, get “raw counts”
+* HTSeq-count: counts reads supporting a feature (exon, gene) by assessing overlapping coordinates
+* StringTie: computational tool to assemble RNA sequencing reads into potential transcripts and estimate how abundantly they are expressed
+* differential expression: tying gene expression back to genotype/phenotype
+   * what genes/transcripts are being expressed at higher/lower levels in different groups of samples?
+   * involves comparison of normalized expression counts of different samples and application of statistical measures to identify quantitative changes in gene expression between two different samples
+* Ballgown: parametric F-test comparing nested linear models

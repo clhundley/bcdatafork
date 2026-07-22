@@ -1,0 +1,365 @@
+---
+title: "wgcna"
+output: html_document
+date: "2026-06-12"
+---
+
+# Setup
+```{r}
+# load in libraries
+library(BiocManager)
+library(tidyverse)
+library(magrittr)
+library(DESeq2)
+library(WGCNA)
+library(dplyr)
+
+devtools::install_github("kevinblighe/CorLevelPlot")
+library(CorLevelPlot)
+
+# load in DESeq2 object
+dds_time <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/dds_time.rds")
+
+# load in column data
+col_data <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/col_data.rds")
+
+# load in environmental data
+env_data <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/env_data.rds")
+env_mat <- env_data[, c("Temp_7d_Avg", "Salinity_7d_Avg", "DO_7d_Avg", "pH_7d_Avg")]
+rownames(env_mat) <- rownames(col_data)
+
+# load in gene2cat table
+gene2cat <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/gene2cat.rds")
+
+# load in goseq results from Month * Location design
+results_time <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/results_time.rds")
+goseq_results_time <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/goseq_results_time.rds")
+```
+
+```{r}
+# transform dds into varianced-stabilized dataset (vsd)
+vsd <- vst(dds_time, blind = FALSE)
+
+# extract normalized counts to a matrix and transpose for WGCNA
+normalized_counts <- assay(vsd) %>%
+  t() # transpose function
+
+# filter to focus on top most variable genes
+gene_var <- apply(normalized_counts, 2, var)
+top_genes <- names(sort(gene_var, decreasing = TRUE))[1:8000]
+normalized_counts <- normalized_counts[, top_genes]
+```
+
+# Pick Soft-Threshold
+```{r}
+# power vector
+powers <- c(1:10, seq(12, 20, by = 2))
+
+# run pickSoftThreshold with normalized counts data
+sft <- pickSoftThreshold(
+  normalized_counts,
+  powerVector = powers
+)
+sft
+```
+
+```{r}
+# convert sft to dataframe and add new column for model fit 
+sft_df <- data.frame(sft$fitIndices) %>%
+  dplyr::mutate(model_fit = -sign(slope) * SFT.R.sq) # scale-free networks should have negative slopes; good model fit is positive (model fit = signed R^2)
+
+# plot model fit vs soft-threshold to decide which soft-threshold power is best
+ggplot(sft_df, aes(Power, y = model_fit, label = Power)) +
+  # plot points
+  geom_point() +
+  # make power labels slightly above the points
+  geom_text(nudge_y = 0.1) +
+  # plot line corresponding to recommended wgcna R^2 value cutoff
+  geom_hline(yintercept = 0.80, col = "red") +
+  # add labels for x and y axis
+  xlab("Soft Threshold (power)") +
+  ylab("Scale Free Topology Model Fit, signed R^2") + 
+  ggtitle("Scale Independence")
+
+# pick power value that is >= 0.80 or if there are multiple that are >= 0.80, pick the one at an inflection point --> I am choosing 5 as the soft-threshold power because it is at the curve of the plot and above 0.80
+```
+
+# Run WGCNA
+```{r}
+# create blockwise network object
+bwnet <- blockwiseModules(
+  normalized_counts,
+  maxBlockSize = 5000, # size chunks of genes the calculations are run in 
+  TOMType = "signed", # topological overlap matrix
+  power = 5, # use power from scale independence plot
+  corFnc = "WGCNA::cor",
+  numericLabels = TRUE,
+  minModuleSize = 100,
+  mergeCutHeight = 0.4
+)
+
+# save result object to RDS file
+saveRDS(bwnet, file = "/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/wgcna_results.rds")
+```
+
+# Load WGCNA blockwise object
+```{r}
+bwnet <- readRDS("wgcna_results.rds")
+```
+
+# Module Eigengenes
+```{r}
+module_eigengenes <- bwnet$MEs
+
+# get number of genes in each module
+table(bwnet$colors)
+```
+
+```{r}
+# plot dendrograms (there are multiple blocks so have to plot them separately in a loop) 
+for (i in 1:length(bwnet$dendrograms)) {
+ plotDendroAndColors(
+  bwnet$dendrograms[[i]],
+  cbind(bwnet$unmergedColors[bwnet$blockGenes[[i]]], bwnet$colors[bwnet$blockGenes[[i]]]),
+  cbind("unmerged", "merged"),
+  dendroLabels = FALSE,
+  addGuide = TRUE,
+  hang = 0.03,
+  guideHang = 0.05,
+  main = paste("Block", i)
+  ) 
+}
+```
+# Find Correlations with Environmental Variables
+
+I split the heatmaps into four different plots to make the correlations and module eigengenes easier to identify.
+```{r}
+num_samples <- nrow(normalized_counts)
+num_genes <- ncol(normalized_counts)
+
+# find pearson correlation coefficients and p-values
+module_env_correlation <- cor(module_eigengenes, env_mat, use = 'p')
+module_env_correlation_pvals <- corPvalueStudent(module_env_correlation, num_samples)
+
+# create a trait matrix for environmental variables, month, and location
+trait_data <- env_mat
+
+# create binary variables for month 
+trait_data$June <- as.numeric(col_data$Month == "June")
+trait_data$July <- as.numeric(col_data$Month == "July")
+trait_data$August <- as.numeric(col_data$Month == "August")
+
+# create binary variables for location
+trait_data$CMT <- as.numeric(col_data$Location == "CMT")
+trait_data$DAF <- as.numeric(col_data$Location == "DAF")
+
+# visualize module-trait correlations as heatmap
+heatmap_data <- merge(module_eigengenes, trait_data, by = "row.names")
+heatmap_data <- heatmap_data %>%
+  column_to_rownames(var = "Row.names")
+
+# heatmap
+CorLevelPlot(heatmap_data,
+             x = names(heatmap_data)[12:20],
+             y = names(heatmap_data)[1:11],
+             col = c("blue1", "skyblue", "white", "pink", "red")
+             )
+```
+Module 1
+```{r}
+# create data frame of gene ids and the modules they are in
+module_gene_mapping <- as.data.frame(bwnet$colors)
+
+# filter for module 1
+
+# get names of module 1 genes (generic gene ids)
+module1_genes <- module_gene_mapping %>%
+  filter(`bwnet$colors` == 1) %>%
+  rownames()
+
+# filter goseq results for the module genes
+module1_gene_symbol <- results_time %>%
+  filter(gene_id %in% module1_genes) %>%
+  pull(gene_symbol) %>%
+  unique()
+
+module1_goseq <- goseq_results_time %>%
+  left_join(
+    gene2cat %>%
+      filter(ensembl_gene_id %in% module1_gene_symbol),
+    by = c("category" = "go_id")
+  ) %>%
+  filter(!is.na(ensembl_gene_id))
+
+module1_goseq <- module1_goseq %>% 
+  group_by(category, over_represented_pvalue, under_represented_pvalue, numDEInCat, numInCat, term, ontology, padj) %>%
+  summarise(
+    n_module_genes = n(),
+    module1_genes = paste(sort(unique(ensembl_gene_id)), collapse = ", "),
+    .groups = "drop"
+  )
+
+module1_goseq
+
+```
+Module 5
+```{r}
+# create data frame of gene ids and the modules they are in
+module_gene_mapping <- as.data.frame(bwnet$colors)
+
+# filter for module 5
+
+# get names of module 5 genes (generic gene ids)
+module5_genes <- module_gene_mapping %>%
+  filter(`bwnet$colors` == 5) %>%
+  rownames()
+
+# filter goseq results for the module genes
+module5_gene_symbol <- results_time %>%
+  filter(gene_id %in% module5_genes) %>%
+  pull(gene_symbol) %>%
+  unique()
+
+module5_goseq <- goseq_results_time %>%
+  left_join(
+    gene2cat %>%
+      filter(ensembl_gene_id %in% module5_gene_symbol),
+    by = c("category" = "go_id")
+  ) %>%
+  filter(!is.na(ensembl_gene_id))
+
+module5_goseq <- module5_goseq %>% 
+  group_by(category, over_represented_pvalue, under_represented_pvalue, numDEInCat, numInCat, term, ontology, padj) %>%
+  summarise(
+    n_module_genes = n(),
+    module5_genes = paste(sort(unique(ensembl_gene_id)), collapse = ", "),
+    .groups = "drop"
+  )
+
+module5_goseq
+
+```
+
+# Heatmaps by Location
+
+I am subsetting the data by location to see if there are any differences in correlations with environmental variables for each location.
+```{r}
+env_mat_daf <- env_mat[
+  grepl("^DAF", rownames(env_mat)),
+]
+env_mat_cmt <- env_mat[
+  grep("^CMT", rownames(env_mat)),
+]
+
+module_eigengenes_daf <- module_eigengenes[
+  rownames(env_mat_daf),
+]
+module_eigengenes_cmt <- module_eigengenes[
+  rownames(env_mat_cmt),
+]
+
+heatmap_data_daf <- merge(
+  module_eigengenes_daf,
+  env_mat_daf,
+  by = "row.names"
+) %>%
+  column_to_rownames("Row.names")
+heatmap_data_cmt <- merge(
+  module_eigengenes_cmt,
+  env_mat_cmt,
+  by = "row.names"
+) %>%
+  column_to_rownames("Row.names")
+```
+
+```{r}
+CorLevelPlot(
+  heatmap_data_daf,
+  x = names(heatmap_data_daf)[12:15],
+  y = names(heatmap_data_daf)[1:11],
+  col = c("blue1", "skyblue", "white", "pink", "red"),
+  main = "DAF Module-Environment Correlations"
+)
+
+CorLevelPlot(
+  heatmap_data_cmt,
+  x = names(heatmap_data_cmt)[12:15],
+  y = names(heatmap_data_cmt)[1:11],
+  col = c("blue1", "skyblue", "white", "pink", "red"),
+  main = "CMT Module-Environment Correlations"
+)
+```
+
+
+
+# Intramodular Analysis
+
+Using the module membership, you can identify genes with high module membership in interesting modules. 
+Using the gene significance, you can identify genes that that have a high significance for each environmental variable of interest.
+
+I am going to identity genes that have a high significance for each environmental variable, then see if those genes have high significance for the modules that have high significance for that environmental variable, and if those same genes have high module membership in those modules. For example, identify a gene that has high significance for temperature, then see if that gene is in module 64 (which we saw had a strong correlation with temperature), and if that gene has high module membership in module 64. 
+
+Module Membership Calculations
+```{r}
+# calculate module membership, which quantifies how strongly a gene belongs to a specific module
+module_membership_measure <- cor(module_eigengenes, normalized_counts, use = 'p')
+
+# calculate p-values for these module membership measures
+module_membership_measure_pvals <- corPvalueStudent(module_membership_measure, num_samples)
+```
+
+Gene Significance Calculations - Temperature
+```{r}
+# calculate gene significance and associated p-values for temperature
+gene_temp_signif_cor <- cor(normalized_counts, env_mat$Temp_7d_Avg, use = 'p')
+gene_temp_signif_cor_pvals <- corPvalueStudent(gene_temp_signif_cor, num_samples)
+
+gene_temp_signif_cor_pvals %>%
+  as.data.frame() %>%
+  arrange(V1) %>%
+  head(25)
+
+gene_temp_signif_cor %>%
+  as.data.frame() %>%
+  arrange(desc(V1)) %>%
+  head(25)
+```
+
+
+Gene Significance Calculations - Salinity
+```{r}
+# calculate gene significance and associated p-values for salinity
+gene_salinity_signif_cor <- cor(normalized_counts, env_mat$Salinity_7d_Avg, use = 'p')
+gene_salinity_signif_cor_pvals <- corPvalueStudent(gene_salinity_signif_cor, num_samples)
+
+gene_salinity_signif_cor_pvals %>%
+  as.data.frame() %>%
+  arrange(V1) %>%
+  head(25)
+```
+
+Gene Significance Calculations - Dissolved Oxygen
+```{r}
+# calculate gene significance and associated p-values for dissolved oxygen
+gene_do_signif_cor <- cor(normalized_counts, env_mat$DO_7d_Avg, use = 'p')
+gene_do_signif_cor_pvals <- corPvalueStudent(gene_do_signif_cor, num_samples)
+
+gene_do_signif_cor_pvals %>%
+  as.data.frame() %>%
+  arrange(V1) %>%
+  head(25)
+```
+
+Gene Significance Calculations - pH
+```{r}
+# calculate gene significance and associated p-values for pH
+gene_ph_signif_cor <- cor(normalized_counts, env_mat$pH_7d_Avg, use = 'p')
+gene_ph_signif_cor_pvals <- corPvalueStudent(gene_ph_signif_cor, num_samples)
+
+gene_ph_signif_cor_pvals %>%
+  as.data.frame() %>%
+  arrange(V1) %>%
+  head(25)
+```
+
+

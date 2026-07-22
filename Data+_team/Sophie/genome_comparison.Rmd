@@ -1,0 +1,144 @@
+---
+title: "genome_comparison"
+output: html_document
+date: "2026-07-10"
+---
+
+# Setup
+```{r}
+# load libraries
+library(dplyr)
+library(FSA)
+library(ggplot2)
+library(RColorBrewer)
+library(ggpubr)
+library(rstatix)
+library(patchwork)
+library(dplyr)
+
+# load alignment stats csv
+alignment_stats <- read.csv("/work/clh162/henry/results/alignment_stats.csv")
+
+# create three datasets for the three genomes
+alignment_cv2017 <- alignment_stats %>%
+  filter(Assembly == "cv2017")
+
+alignment_yale2025 <- alignment_stats %>%
+  filter(Assembly == "yale2025")
+
+alignment_ru2025 <- alignment_stats %>%
+  filter(Assembly == "ru2025")
+
+# create vectors for concordant 1x alignment (percent)
+concordant_1x_cv2017 <- alignment_cv2017$Concordant_1x_per
+concordant_1x_yale2025 <- alignment_yale2025$Concordant_1x_per
+concordant_1x_ru2025 <- alignment_ru2025$Concordant_1x_per
+
+# create vectors for concordant >1x alignment (percent)
+concordant_morethan_1x_cv2017 <- alignment_cv2017$Concordant_morethan_1x_per
+concordant_morethan_1x_yale2025 <- alignment_yale2025$Concordant_morethan_1x_per
+concordant_morethan_1x_ru2025 <- alignment_ru2025$Concordant_morethan_1x_per
+```
+
+# Concordant 1x Alignment
+```{r}
+# run shapiro wilk test to check normality of distribution
+shapiro.test(concordant_1x_cv2017)
+shapiro.test(concordant_1x_yale2025)
+shapiro.test(concordant_1x_ru2025)
+
+# data is not normally distributed
+```
+
+```{r}
+kruskal.test(Concordant_1x_per ~ Assembly, data = alignment_stats)
+
+dunnTest(Concordant_1x_per ~ Assembly, data = alignment_stats, method = "holm")
+
+# based on these results, the cv2017 genome assembly is different from the newer genomes (ru2025 and yale2025) for concordant 1x alignment because the adjusted pvalues are less than 0.05
+```
+
+```{r}
+# change Assembly column to factor and set levels to the three reference genomes
+alignment_stats$Assembly <- factor(
+  alignment_stats$Assembly,
+  levels = c("cv2017", "yale2025", "ru2025")
+)
+
+# list of colors for boxplot
+my_cols <- c(
+  "#A62631FF",
+  "orchid4",  
+  "#272A59FF"  
+)
+
+# create list of all pairwise comparisons between genomes
+comparisons <- list(
+  c(levels(alignment_stats$Assembly)[1], levels(alignment_stats$Assembly)[2]),
+  c(levels(alignment_stats$Assembly)[1], levels(alignment_stats$Assembly)[3]),
+  c(levels(alignment_stats$Assembly)[2], levels(alignment_stats$Assembly)[3])
+)
+
+# calculate max y value (used for test label positioning in boxplot)
+ymax <- max(alignment_stats$Concordant_1x_per, na.rm = TRUE)
+
+# generate boxplot for concordant 1x alignment with kruskal-wallis and wilcoxon test results 
+ggboxplot(
+  alignment_stats,
+  x = "Assembly",
+  y = "Concordant_1x_per",
+  fill = "Assembly",
+  palette = my_cols,
+  outlier.shape = NA,
+  alpha = 0.65
+) +
+  geom_jitter(
+    aes(color = Assembly),
+    shape = 21,
+    fill = "gray90",   
+    size = 3.2,
+    stroke = 1,       
+    width = 0.15,
+    alpha = 1
+  ) +
+  scale_fill_manual(values = my_cols) +
+  scale_color_manual(values = my_cols) +
+  stat_compare_means(
+    method = "kruskal.test",
+    label.y = ymax * 1.18
+  ) +
+  stat_compare_means(
+    comparisons = comparisons,
+    method = "wilcox.test",
+    label = "p.format",
+    hide.ns = FALSE,
+    label.y = c(ymax * 1.03,
+                ymax * 1.08,
+                ymax * 1.13)
+  ) +
+  labs(
+    x = "Assembly",
+    y = "Concordant 1x Alignment (%)"
+  ) +
+  theme_pubr() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+# Concordant >1x Alignment
+```{r}
+# run shapiro wilk test to check normality of distribution
+shapiro.test(concordant_morethan_1x_cv2017)
+shapiro.test(concordant_morethan_1x_yale2025)
+shapiro.test(concordant_morethan_1x_ru2025)
+```
+```{r}
+kruskal.test(Concordant_morethan_1x_per ~ Assembly, data = alignment_stats)
+
+dunnTest(Concordant_morethan_1x_per ~ Assembly, data = alignment_stats, method = "holm")
+
+# based on these results, all three genome assemblies are different from each other for concordant >1x alignment because the adjusted pvalues are less than 0.05
+```
+
+

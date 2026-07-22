@@ -1,0 +1,1360 @@
+---
+title: "24_rnaseq_pipeline_RU25"
+author: "Anna Zhang"
+date: "2026-06-05"
+output: 
+  pdf_document: default
+  html_document: default
+---
+
+# Rutgers 2025 Oyster Data Analysis
+
+## Steps
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### SE: Load Gene Count Data
+
+```{r}
+# SE = Summarized Experiment
+#################### count - number of reads mapped/gene
+######### a measure of gene expression
+
+library(stringr)
+library(dplyr)
+# read the gene count files
+counts <- read.csv("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/gene_counts/gene_counts.csv", skip = 1, check.names = FALSE, row.names = 1 )
+
+# view/check data format to see if adjustments needed
+colnames(counts)[1:10]
+head(counts)
+
+# remove feature_counts data to keep only gene data
+sample_names <- basename(colnames(counts)[6:ncol(counts)])
+
+# clean sample names
+sample_names <- sub("_sorted\\.bam", "", sample_names)
+sample_names <- sub("^(.*_Gill).*", "\\1", sample_names)
+colnames(counts)[6:ncol(counts)] <- sample_names
+
+# set the column names to just the sample names
+count_matrix <- counts[, 6:ncol(counts)]
+
+# save count_matrix
+write.table(
+  count_matrix,
+  file = "/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/RU25_gcounts_clean.txt",
+  sep = "\t",
+  quote = FALSE,
+  row.names = TRUE,
+  col.names = NA
+)
+```
+
+### SE: Load and Process Metadata
+
+```{r}
+
+####################### colData - metadata, extra info ex. 
+######### location, collection date, rna...etc.
+### describes the column of count matrix
+
+# load necessary library
+library(readxl)
+
+# read the gene annotation files, skip the first line of "None"
+coldata_raw <- read_excel("/work/clh162/OysterRNA24/xRNA for BC Summer 2024.xlsx", sheet = 1, skip = 1)
+
+dim(coldata_raw) #view dimension
+```
+
+### SE: Clean and Resize Metadata to Match Gene Counts Data
+
+```{r}
+# convert coldata_raw into standard R frame and rename: coldata
+coldata <- as.data.frame(coldata_raw)
+
+# set column "Sample_ID" as rownames of coldata
+rownames(coldata) <- coldata$Sample_ID
+# View(coldata) # visualize resulting data
+
+# check for matching qualities
+all(colnames(count_matrix) == rownames(coldata))
+
+# rearrange rows of coldata to match column names in count matrix
+coldata <- coldata[colnames(count_matrix), ]
+
+# quick Quality Check
+stopifnot(identical(colnames(count_matrix), rownames(coldata)))
+all(colnames(count_matrix) == rownames(coldata)) # matching check - want TRUE
+
+# View(coldata) # visualize
+```
+
+### SE: Import and Process Gene Annotations
+
+```{r}
+
+############ gtf is gene annotation
+#### contains exons, cds regions, transcripts
+
+# read genes annotations w/ specific attributes
+gtf <- read.delim("/work/clh162/OysterRNA24/hisat2_align/Cv_genome_RU_2025_shared/Cvi_RU25.gtf", comment.char= "#", header = FALSE, sep = "\t", quote = "")
+
+#Manually assign geonomic column names
+names(gtf) <- c("sequence", "source", "feature", "start", "end", "score", "strand", "frame", "attribute")
+table(gtf$feature) #Output counts on CDs, exon, transcripts
+
+# keep transcripts in gtf
+transcripts <- gtf[gtf$feature == "transcript", ]
+transcripts$attribute <- as.character(transcripts$attribute)
+
+# extract gene_id
+transcripts$gene_id <- sub('.*gene_id "([^"]+)".*$', '\\1', transcripts$attribute)
+transcripts$gene_id <- as.character(transcripts$gene_id)
+
+# ensure character
+rownames(count_matrix) <- as.character(rownames(count_matrix))
+transcripts$gene_id <- as.character(transcripts$gene_id)
+
+# intersect for common gene ids
+common <- intersect(rownames(count_matrix), transcripts$gene_id)
+count_matrix <- count_matrix[common, ]
+transcripts <- transcripts[transcripts$gene_id %in% common, ]
+
+# define rowranges
+rowranges <- transcripts
+
+# force the identical orders
+rowranges <- rowranges[match(rownames(count_matrix), rowranges$gene_id), ]
+rownames(rowranges) <- rowranges$gene_id
+
+# final check
+stopifnot(identical(rownames(count_matrix), rownames(rowranges)))
+
+```
+
+### SE: Assemble Summarized Experiment
+
+```{r}
+stopifnot(
+  identical(rownames(count_matrix), transcripts$gene_id) # starter Quality Check
+)
+
+# load packages
+library(SummarizedExperiment)
+library(GenomicRanges)
+
+# create GRange object containing genomic coordinates for each gene
+genes_row <-GRanges(
+  seqnames = rowranges$sequence, 
+  ranges = IRanges(rowranges$start, rowranges$end),
+  strand = rowranges$strand
+)
+
+names(genes_row) <- rownames(rowranges) #gives every gene a gene name
+
+# build Summarized Experiment Object
+se <- SummarizedExperiment(
+  assays = list(counts = as.matrix(count_matrix)),
+  rowRanges = genes_row,
+  colData = coldata
+)
+
+# quality check
+head(assay(se))
+head(rowRanges(se))
+
+all(rownames(se) == rownames(counts))
+all(colnames(se) == colnames(counts))
+
+colData(se) # access the sample annotations
+
+# save the Summarized Experiment File
+dir.create("data", showWarnings = FALSE)
+saveRDS(se, "data/ru25_se.rds")
+```
+
+### DESeq: Generate DESeqDataSet
+
+```{r fig.width= 10, fig.height = 8}
+
+# load packages
+suppressPackageStartupMessages({
+    library(DESeq2)
+    library(ExploreModelMatrix)})
+
+#Load saved Summarized Experiment object
+se <- readRDS("data/ru25_se.rds")
+
+#Extract month from collection date in data
+colData(se)$Month <- format(colData(se)$Date_Collected, "%b")
+
+# Convert metadata variables to factors
+colData(se)$Location <- factor(colData(se)$Location)
+colData(se)$Month <- factor(
+  colData(se)$Month,
+  levels = c("Jun", "Jul", "Aug") # specify order
+)
+
+# view column names to evaluate validity
+colnames(colData(se))
+
+# --- Create DESeqDataSet object --- #
+ 
+# DESeq for Single Design (Location)
+dds_location <- DESeqDataSet(
+  se, 
+  design = ~ Location
+)
+dds_location <- DESeq(dds_location)
+plotDispEsts(dds_location, main = "Dispersion Estimates: Design ~Location")
+
+# DESeq for Single Design (Month)
+dds_month <- DESeqDataSet(
+  se, 
+  design = ~ Month)
+dds_month <- DESeq(dds_month)
+plotDispEsts(dds_month, main = "Dispersion Estimates: Design ~Month")
+
+
+# DESeq for Combination Design (Month * Location)
+dds <- DESeqDataSet(
+  se, 
+  design = ~ Location * Month)
+# set DAF as the reference location
+dds$Location <- relevel(dds$Location, ref = "DAF")
+dds <- DESeq(dds)
+plotDispEsts(dds, main = "Dispersion Estimates: Design ~Location * Month")
+```
+
+### DESeq: Extract, Organize, and Name Data
+
+```{r}
+
+# load packages
+library(readr)
+library(tibble)
+
+deseq_out_dir <- "/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/DESeq2_Rutgers2025/"
+if(!dir.exists(deseq_out_dir)) dir.create(deseq_out_dir, recursive = TRUE)
+
+# Extract site comparisons
+res_CMT_vs_DAF_Jun <- results(dds, contrast = c("Location", "CMT", "DAF"), alpha = 0.05)
+
+res_CMT_vs_DAF_Jul <- results(dds,
+  contrast = list(c("Location_CMT_vs_DAF", "LocationCMT.MonthJul")), alpha = 0.05)
+
+res_CMT_vs_DAF_Aug <- results(dds,
+  contrast = list(c("Location_CMT_vs_DAF", "LocationCMT.MonthAug")), alpha = 0.05)
+
+# Extract CMT month comparisons (CMT is non-reference now, needs interaction sum)
+res_Jul_vs_Jun_CMT <- results(dds,
+  contrast = list(c("Month_Jul_vs_Jun", "LocationCMT.MonthJul")), alpha = 0.05)
+
+res_Aug_vs_Jun_CMT <- results(dds,
+  contrast = list(c("Month_Aug_vs_Jun", "LocationCMT.MonthAug")), alpha = 0.05)
+
+res_Aug_vs_Jul_CMT <- results(dds,
+  contrast = list(c("Month_Aug_vs_Jun", "LocationCMT.MonthAug"),
+                   c("Month_Jul_vs_Jun", "LocationCMT.MonthJul")), alpha = 0.05)
+
+# Construct full comparisons list
+deseq_comps <- list(
+  "res_CMT_vs_DAF_Jun" = res_CMT_vs_DAF_Jun,
+  "res_CMT_vs_DAF_Jul" = res_CMT_vs_DAF_Jul,
+  "res_CMT_vs_DAF_Aug" = res_CMT_vs_DAF_Aug,
+
+  "res_Jul_vs_Jun_DAF" = c("Month", "Jul", "Jun"),
+  "res_Aug_vs_Jun_DAF" = c("Month", "Aug", "Jun"),
+  "res_Aug_vs_Jul_DAF" = c("Month", "Aug", "Jul"),
+
+  "res_Jul_vs_Jun_CMT" = res_Jul_vs_Jun_CMT,
+  "res_Aug_vs_Jun_CMT" = res_Aug_vs_Jun_CMT,
+  "res_Aug_vs_Jul_CMT" = res_Aug_vs_Jul_CMT
+)
+for (item in names(deseq_comps)) {
+  message(paste("Processing:", item))
+  if (inherits(deseq_comps[[item]], "DESeqResults")) {
+    res_df <- as.data.frame(deseq_comps[[item]])
+  } else {
+    res_obj <- results(dds, contrast = deseq_comps[[item]], alpha = 0.05)
+    # --- Assign it to global environment --- #
+    assign(item, res_obj, envir = .GlobalEnv)
+    res_df <- as.data.frame(res_obj)
+  }
+}
+all_comps <- c(
+  #  --- Site-to-Site Comparisons --- #
+  "res_CMT_vs_DAF_Jun",
+  "res_CMT_vs_DAF_Jul",
+  "res_CMT_vs_DAF_Aug",
+  
+  # ---DAF Comparisons ---#
+  "res_Jul_vs_Jun_DAF",
+  "res_Aug_vs_Jun_DAF",
+  "res_Aug_vs_Jul_DAF",
+  
+  # --- CMT Comparisons --- #
+  "res_Jul_vs_Jun_CMT",
+  "res_Aug_vs_Jun_CMT",
+  "res_Aug_vs_Jul_CMT"
+)
+
+#Convert row names to dedicated column and save as .csv in dir
+for (item in all_comps) {
+  # --- print saving message to follow workflow ---#
+  message(paste("Saving file:", item))
+  write_csv(
+    as.data.frame(get(item)) |> rownames_to_column(var= "gene_id"),
+    paste0(deseq_out_dir, item))}
+```
+
+### DESeq: Remove Unexpressed Genes
+
+```{r}
+
+# load required packages
+suppressPackageStartupMessages({
+    library(vsn)
+    library(ggplot2)
+})
+
+# number of genes total before filtering
+nrow(dds)
+
+# keep genes with at least 10 counts in at least 3 samples
+keep <- rowSums(counts(dds) >= 10) >= 3
+sum(keep)
+dds <- dds[keep, ]
+```
+
+### DESeq: Adjust Library Size Differences
+
+```{r}
+###########3#Library size = the total num of reads assigned to genes/sample
+
+# total counts per sample
+se$libSize <- colSums(assay(se))
+
+#Plot libSize by using R's native pipe "|>"
+#to extract colData, turn into reg data frame
+#send to ggplot
+
+# visualize library sizes across all samples
+colData(se) |>
+  as.data.frame() |>
+  ggplot(aes(Sample_ID, 
+             y = libSize /1e6, 
+             fill = Location)) +   
+  geom_col() + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1, 
+                                   vjust = 1))
+
+# store size factors into  a DESeqDataSet for normalization
+dds <- estimateSizeFactors(dds)
+
+# compare size factors to raw library sizes
+ggplot(data.frame(
+  libSize = colSums(counts(dds)), 
+  sizeFactor = sizeFactors(dds),
+  Location = dds$Location), 
+       aes(libSize, sizeFactor, 
+           color = Location)) +
+  geom_point(size = 3) + theme_bw() 
+```
+
+### DESeq: Run DESeq2
+
+```{r}
+
+# Extract default DESeq2 results
+results <- results (dds)
+
+# Summarize differential expression results
+summary(results)
+
+#Give more specific threshold
+results0.01 <- results(dds, alpha = 0.01)
+summary(results0.01)
+
+#View model coefficients
+resultsNames(dds)
+```
+
+### DESeq: Transform Data
+
+```{r}
+# examine mean-SD relationships
+meanSdPlot(assay(dds), ranks = FALSE)
+
+# variance stabilizing transformation
+vsd <- DESeq2::vst(dds, blind = FALSE)
+
+# examine mean_SD again after vst
+meanSdPlot(assay(vsd), ranks = FALSE)
+```
+
+### Statistics and Visualizations: Create PCAs
+
+```{r}
+# install and load packages
+install.packages("ggrepel")
+library(ggrepel)            
+
+#1: Create PCA: Color Comparison on Location
+pcaData <- plotPCA(vsd,
+                   intgroup = c("Location","Month"),
+                   returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+pcaData$Sample_ID <- rownames(pcaData)
+pcaData$Sample_ID <- sub("_Gill$", "", pcaData$Sample_ID)
+
+ggplot(pcaData, aes(x = PC1, y = PC2, label = Sample_ID)) +
+  geom_point(aes(color = Location, shape = Month), size = 3) +
+  geom_text_repel(aes(label = sub("^.*_([^_]+)_[^_]+$", "\\1", Sample_ID)),size = 3, max.overlaps = Inf, box.padding = 0.3) +
+  theme_minimal() +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  scale_color_manual(values = c(CMT = "red", DAF = "blue"))
+
+#2: Create PCA: Color Comparison on Months
+
+ggplot(pcaData, aes(x = PC1, y = PC2, label = Sample_ID)) +
+  geom_point(aes(color = Month, shape = Location), size = 3) +
+  geom_text_repel(aes(label = sub("^.*_([^_]+)_[^_]+$", "\\1", Sample_ID)),size = 3, max.overlaps = Inf, box.padding = 0.3) +
+  theme_minimal() +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  scale_color_manual(values = c(Jun = "red", Jul = "orange", Aug = "yellow"))
+```
+
+### Statistics and Visualizations: Volcano Plot
+
+```{r fig.width = 10, fig.height = 8}
+library(dplyr)
+library(ggplot2)
+library(tibble)
+
+ru25_volout_dir <- "/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/RU25_vol_plots/"
+dir.create(ru25_volout_dir, showWarnings = FALSE, recursive = TRUE)
+for (item in all_comps) {
+
+  res_df <- as.data.frame(get(item)) |>
+    rownames_to_column("gene_id") |>
+    filter(
+      !is.na(log2FoldChange),
+      !is.na(padj)
+    ) |>
+    mutate(
+      significant = ifelse(
+        padj < 0.05 & abs(log2FoldChange) >= 1,
+        "Significant",
+        "Not significant"
+      )
+    )
+    cat("Contrast:", item, " | rows:", nrow(res_df), "\n")
+    print(summary(res_df$log2FoldChange))
+    print(table(res_df$significant))
+
+  p <- ggplot(
+    res_df,
+    aes(
+      x = log2FoldChange,
+      y = -log10(padj),
+      color = significant
+    )
+  ) +
+    geom_point(size = 1.5, alpha = 0.6) +
+    scale_color_manual(
+      values = c(
+        "Significant" = "red",
+        "Not significant" = "blue"
+      )
+    ) +
+    geom_hline(
+      yintercept = -log10(0.05),
+      linetype = "dashed"
+    ) +
+    geom_vline(
+      xintercept = c(-1, 1),
+      linetype = "dashed"
+    ) +
+    scale_y_continuous(limits = c(0, 20), oob = scales::squish) +
+    coord_cartesian(xlim = c(-6, 6))+
+    theme_bw(base_size = 16) +
+    labs(
+      title = paste("Volcano Plot:", sub("^res_", "", item)),
+      x = "log2 Fold Change",
+      y = expression(-log[10]("adjusted p-value")),
+      color = "Significance"
+    )
+  print(p)
+  ggsave(
+    filename = paste0(ru25_volout_dir, item, ".png"),
+    plot = p, width = 10, height = 8, dpi = 300)}
+```
+
+### Statistics and Visualizations: Create Heat Maps and Clustering
+
+```{r, fig.width=8, fig.height=6}
+
+# load packages
+library(ComplexHeatmap)
+library(matrixStats)
+library(dplyr)
+library(circlize)
+
+# create color series to be used
+color_rb <- colorRamp2(c(-3,0,3), c("blue", "white", "red"))
+
+# set factor levels 
+vsd$Month <- factor(vsd$Month, levels = c("Jun", "Jul", "Aug"))
+vsd$Location <- factor(vsd$Location, levels = c("DAF", "CMT"))
+ord <- order(vsd$Location, vsd$Month)
+
+res_df <- as.data.frame(results(dds, name = "Location_CMT_vs_DAF"))
+res_df$gene_id <- rownames(res_df)
+
+# filter out top 50 significantly differentially expressed genes
+  topgenes <- res_df|>
+    filter(
+      !is.na(padj), #remove genes with missing adjusted p-values
+      padj < 0.01, #statistically significant
+      abs(log2FoldChange)>= 2 #at least 4-fold change 
+    ) |>
+    arrange(padj) |> # sort from most to least significant
+    slice_head(n = 50) |> #grab the top 50 most significant
+    pull(gene_id) #grab the gene ids
+
+  mat <- assay(vsd)[topgenes,] # extract expression value for topgenes
+  mat <-t(scale(t(mat))) # z-score each gene
+  mat <- mat[, ord] # reorder
+  
+  #limit extreme z-score for heat map scale
+  mat[mat< -3] <- -3
+  mat[mat> 3]  <- 3
+    
+  # create heat map annotation
+  ha <- HeatmapAnnotation(
+    Location = vsd$Location[ord],
+    Month = vsd$Month[ord],
+    col = list(
+      Location = c(
+        CMT = "darkred",
+        DAF = "blue"), 
+      Month = c(
+        Jun = "gold",
+        Jul = "orange",
+        Aug = "forestgreen"
+      )))
+  
+  # create heat map sets 
+Heatmap(
+  mat,
+  col = color_rb,
+  name = "Gene Expression Level",
+  show_row_names = FALSE,
+  cluster_columns = FALSE, 
+  column_split = data.frame(
+    Location = vsd$Location[ord],
+    Month = vsd$Month[ord]),
+  top_annotation = ha,
+  column_title = "Top DE Genes: DAF vs CMT"
+    )
+
+# pairwise month heat maps
+loc_loop <- c("DAF", "CMT")
+month_loop <- list(
+  c("Jun", "Jul"),
+  c("Jun", "Aug"),
+  c("Jul", "Aug")
+)
+
+# loop through each location
+for (loc in loc_loop) {
+  dds_heat <- dds[, dds$Location == loc]
+  dds_heat$Month <- droplevels(dds_heat$Month)
+  design(dds_heat) <- ~ Month
+  dds_heat <- DESeq(dds_heat)
+  vsd_heat <- vst(dds_heat, blind = FALSE) # apply variance stabilizing transformation
+  
+  # loop through each month comparison
+  for(obj in month_loop) {
+    heat_month1 <- obj[1]
+    heat_month2 <- obj[2]
+    res_heat <- results(
+      dds_heat, 
+      contrast = c("Month", heat_month2, heat_month1)
+    )
+    res_df <- as.data.frame(res_heat)
+    res_df$gene_id <- rownames(res_df)
+    topgenes <- res_df|>
+    filter(
+      !is.na(padj), # remove genes with missing adjusted p-values
+      padj < 0.01, # statistically significant
+      abs(log2FoldChange)>= 2 # at least 4-fold change 
+    ) |>
+    arrange(padj) |> # sort from most to least significant
+    slice_head(n = 50) |> # grab the top 50 most significant
+    pull(gene_id) # grab the gene ids
+    
+    # order samples by month
+    heat_ord <- order(vsd_heat$Month)
+    
+    mat <- assay(vsd_heat)[topgenes,]
+    mat <-t(scale(t(mat)))
+    mat <- mat[, heat_ord]
+    mat[mat< -3] <- -3
+    mat[mat> 3]  <- 3
+    
+    heat_ha <- HeatmapAnnotation(
+    Month = vsd_heat$Month[heat_ord],
+    col = list(
+        Month = c(
+            Jun = "gold",
+            Jul = "orange",
+            Aug = "forestgreen")))
+    
+    # create heat maps
+    h_map <- Heatmap(
+      mat, 
+      col = color_rb, 
+      name = "Gene Expression Level",
+      show_row_names = FALSE, 
+      cluster_columns = FALSE, 
+      top_annotation = heat_ha, 
+      column_title = paste(
+        "Top Genes:",
+        loc, 
+        heat_month1, 
+        "vs.",
+        heat_month2
+      ))
+    print(h_map)
+  }}
+```
+
+### Statistics and Visualization: Pairwise comparison MA Plots
+
+```{r, fig.width=8, fig.height=6}
+# install package
+install.packages("ashr")
+ 
+# loop through comparisons for MA-plot : log fold change vs. average expression signal with all the genes
+for (item in all_comps) {
+  res_ma <- get(item)
+  plotMA(
+    res_ma, 
+    ylim = c(-4,4),
+    main = sub("^res_", "", item)
+  )
+}
+```
+
+### Statistics and Visualization: Plot MA with LFC Shrinkage
+
+```{r}
+# view names of dds results
+resultsNames(dds)
+
+# ignore the "Intercept" result in dds
+coef_names <- resultsNames(dds)[-1]
+
+# loop through all coef_names = names of estimated model coefficients ( the specific effect sizes and comparisons)
+for (item in coef_names) {
+  LFC <- lfcShrink(dds, coef = item, type = "apeglm")
+  plotMA(
+    LFC, 
+    main = item, 
+    cex = 0.5
+  )
+  # --- Raw p-value histogram --- #
+  hist(
+    LFC$pvalue, 
+    breaks = 50, 
+    col = "grey",
+    main = item, 
+    xlab = "p-value"
+  )
+  # --- Adjusted p-value histogram --- #
+  hist(
+    LFC$padj, 
+    breaks = 50, 
+    col = "grey",
+    main = item, 
+    xlab = "Adjusted p-value"
+  )
+}
+```
+
+### Environmental Factors: Load Environmental Data
+
+```{r}
+# load package
+library(readr)
+
+# read the data in excel format
+ph <- read_excel("/work/clh162/Data+/Anna/2025-2026-team-code-az199/pH_2024.xlsx")
+salinity <- read_excel("/work/clh162/Data+/Anna/2025-2026-team-code-az199/Salinity_2024.xlsx")
+dis_ox <- read_excel("/work/clh162/Data+/Anna/2025-2026-team-code-az199/DOsensor_2024.xlsx")
+temp <- read_excel("/work/clh162/Data+/Anna/2025-2026-team-code-az199/Salinity_2024.xlsx")
+
+# standardize data
+# convert all environmental dataset date column to DateTime format
+ph$DateTime <- as.Date(ph$DateTime)
+salinity$DateTime <- as.Date(salinity$DateTime)
+dis_ox$DateTime <- as.Date(dis_ox$DateTime)
+temp$DateTime <- as.Date(temp$DateTime)
+
+# dates when oyster samples were collected for RNA sequencing
+collect_dates <- as.Date(c("2024-06-20", "2024-07-22", "2024-08-19"))
+
+# filter and average environmental matrix for the 7 days leading up to collection date period for all environmental data variables
+
+ph_avg <- bind_rows(lapply(collect_dates, function(d) {
+  ph |>
+  filter(DateTime >= d - 6,
+         DateTime <= d) |>
+  summarise(
+    CollectionDate = d,
+    pH = mean(pH, na.rm = TRUE))
+}))
+salin_avg <- bind_rows(lapply(collect_dates, function(d) {
+  salinity |>
+  filter(DateTime >= d - 6,
+         DateTime <= d) |>
+  summarise(
+    CollectionDate = d,
+    Salinity = mean(Sal_ppt, na.rm = TRUE))
+}))
+do_avg <- bind_rows(lapply(collect_dates, function(d) {
+  dis_ox |>
+  filter(DateTime >= d - 6,
+         DateTime <= d) |>
+  summarise(
+    CollectionDate = d,
+    DO = mean(DomgL, na.rm = TRUE))
+}))
+temp_avg <- bind_rows(lapply(collect_dates, function(d) {
+  temp |>
+  filter(DateTime >= d - 6,
+         DateTime <= d) |>
+  summarise(
+    CollectionDate = d,
+    Temperature = mean(Temp_C, na.rm = TRUE))
+}))
+
+# combine all environmental variables into one master table by collection date
+env_master <- ph_avg |>
+  left_join(salin_avg, by = "CollectionDate") |>
+  left_join(do_avg, by = "CollectionDate") |>
+  left_join(temp_avg, by = "CollectionDate")
+
+# View(env_master) # visualize resulting data table
+```
+
+### Environmental Factors: Extract and Convert PCA Dates from Sample ID
+
+```{r}
+
+# load package
+library(stringr)
+
+# load by dates and combine data
+pcaData <- pcaData |>
+  mutate(CollectionDate = case_when(
+    str_detect(Sample_ID, "20Jun24|21Jun24") ~ as.Date("2024-06-20"),
+    str_detect(Sample_ID, "22Jul24|23Jul24") ~ as.Date("2024-07-22"),
+    str_detect(Sample_ID, "19Aug24|20Aug24") ~ as.Date("2024-08-19"),
+    TRUE ~ as.Date(NA)))
+pca_mergdat <- left_join(pcaData, env_master, by = "CollectionDate")
+```
+
+### Environmental Factors: PCAs
+
+```{r fig.width = 8, fig.height = 6}
+
+# create list of variables to loop through
+env_factors <- c("pH", "Salinity", "DO", "Temperature")
+
+for (item in env_factors) {
+  env_plots <- ggplot(pca_mergdat, aes(x= PC1, y=PC2)) +
+    geom_point(aes(color = .data[[item]], shape = Month), size = 3) +
+    geom_text_repel(aes(label = sub("^([^_]+_[^_]+)_.*$", "\\1", Sample_ID)),size = 3, max.overlaps = Inf, box.padding = 0.3) +
+    scale_color_viridis_c()+
+    theme_minimal() +
+    labs(
+      title = paste("PCA:", item),
+      x = paste0("PC1: ", percentVar[1], "% variance"),
+      y = paste0("PC2: ", percentVar[2], "% variance"),
+      color = item,
+      shape = "Month") +
+    coord_fixed()
+  print(env_plots)
+}
+```
+
+### Environmental Factors: Correlations Between Environmental Factors
+
+```{r}
+# load packages
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+
+# take the average of the daily values
+ph_daily <- ph |>
+  group_by(DateTime) |>
+  summarise(pH = mean(pH, na.rm = TRUE))
+salin_daily <- salinity |>
+  group_by(DateTime) |>
+  summarise(Salinity = mean(Sal_ppt, na.rm = TRUE))
+do_daily <- dis_ox |>
+  group_by(DateTime) |>
+  summarise(DO = mean(DomgL, na.rm = TRUE))
+temp_daily <- temp |>
+  group_by(DateTime) |>
+  summarise(Temperature = mean(Temp_C, na.rm = TRUE))
+
+# joint list
+env_corr <- ph_daily |>
+  left_join(salin_daily, by = "DateTime") |>
+  left_join(do_daily, by = "DateTime") |>
+  left_join(temp_daily, by = "DateTime")
+env_corr <-env_corr |>
+  filter(DateTime >= as.Date("2024-06-01"),
+         DateTime <= as.Date("2024-08-31"))
+# Spline interpolation for missing values
+env_corr <- env_corr |>
+  arrange(DateTime)
+
+# temperature and salinity have missing values
+
+# Salinity
+good_sal <- !is.na(env_corr$Salinity)
+env_corr$Salinity <- spline(
+  x = as.numeric(env_corr$DateTime[good_sal]),
+  y = env_corr$Salinity[good_sal],
+  xout = as.numeric(env_corr$DateTime),
+  method = "natural"
+)$y
+
+# Temperature
+good_temp <- !is.na(env_corr$Temperature)
+env_corr$Temperature <- spline(
+  x = as.numeric(env_corr$DateTime[good_temp]),
+  y = env_corr$Temperature[good_temp],
+  xout = as.numeric(env_corr$DateTime),
+  method = "natural"
+)$y
+env_numeric <- env_corr |>
+  dplyr::select(pH, Salinity, DO, Temperature)
+env_corr_matrix <- cor(env_numeric, 
+                       method = "spearman",
+                       use = "complete.obs")
+
+# vectorized custom color function excluding perfect 1.0 and -1.0
+corr_colors <- colorRamp2(
+  # Default everything to light grey
+  c(-1, -0.3, 0, 0.3, 1),
+  c("red", "coral", "white", "lightblue", "blue"))
+  
+# generate the Correlation Heatmap
+env_corr_map <- Heatmap(
+  env_corr_matrix, 
+  name = "Spearman\nCorrelation (r)",
+  col = corr_colors, # Custom color function
+  show_row_names = TRUE,
+  show_column_names = TRUE, 
+  cluster_columns = TRUE,
+  cluster_rows = TRUE, 
+  show_column_dend = FALSE, 
+  show_row_dend = FALSE,
+  column_title = "Correlation Between Environmental Factors",
+  
+  # custom cell function: Print ALL numbers with font size 26
+  cell_fun = function(j, i, x, y, width, height, fill) {
+
+  r <- env_corr_matrix[i, j]
+
+  if (abs(r) > 0.3 || i == j) {
+    grid.text(
+      sprintf("%.2f", r),
+      x, y,
+      gp = gpar(fontsize = 26, fontface = "bold")
+    )
+  }},
+  # legend parameters
+  heatmap_legend_param = list(
+    at = c(-1, -0.3, 0, 0.3, 1),
+    labels = c("-1.0", "-0.3", "0.0", "0.3", "1.0"))
+)
+print(env_corr_map)
+
+```
+
+### WGCNA: Install/load packages
+
+```{r}
+# install/load necessary packages
+library(WGCNA)
+library(tidyverse)
+library(CorLevelPlot)
+library(gridExtra)
+library(SummarizedExperiment)
+library(matrixStats)
+allowWGCNAThreads()
+```
+
+### WGCNA: Prepare Data
+
+```{r}
+
+expr <- assay(vsd)   #expression matrix
+
+# filter for top 8000 Median Absolute Deviation (MAD) genes to limit modules and eliminate noises
+gene_mad <- rowMads(expr)
+top8000 <- names(sort(gene_mad, decreasing = TRUE)[1:8000])
+expr_filtered <- expr[top8000, ]
+
+# get metadata
+pheno <- as.data.frame(colData(vsd))
+feature <- as.data.frame(rowData(vsd))[top8000,  , drop = FALSE]
+
+# transpose the data
+datexpr <- t(expr_filtered)
+
+
+# row names and column names check
+dim(datexpr)
+head(rownames(datexpr))
+head(colnames(datexpr))
+
+# check for missing values
+gsg <- goodSamplesGenes(datexpr, verbose = 3)
+gsg$allOK # should return TRUE to move on
+```
+
+### WGCNA: Cluster Samples
+
+```{r fig.width = 8, fig.height=8}
+# create sample tree
+samptree <- hclust(dist(datexpr), method = "average")
+
+# visualize sample tree
+plot(samptree, 
+     main = "Sample Clustering to Detect Outliers",
+     xlab = "",
+     sub = "",
+     cex.lab = 1.5,
+     cex.axis = 1.5, 
+     cex.main = 2)
+
+```
+
+### WGCNA: Adjacency: Pairwise Connection
+
+```{r}
+##################### nodes are considered "connected" if they have significant pairwise correlation association
+
+# determine appropriate parameter to calculate adjacency matrix
+
+# standard range recommended by WGCNA
+powers <- c(1:10, seq(12, 20, by = 2))
+
+# calculate scale-free topology statistics
+sft <- pickSoftThreshold(datexpr, #sample x genes matrix
+                         powerVector = powers, 
+                         verbose = 5) #print updated progress
+                         
+# visualize through 2 side-by-side plots
+# Plot 1: Scale-Free Topology Model Fit
+par(mar=c(1, 1, 1, 1))
+plot(
+  sft$fitIndices[,1],
+  -sign(sft$fitIndices[,3]) *
+  sft$fitIndices[,2],
+  xlab = "Soft threshold (Power)",
+  ylab = "Scale-Free Topology Fit Index, signed R^2",
+  type = "n",
+  main = "Scale Independence"
+          )
+text(
+  sft$fitIndices[,1],
+  -sign(sft$fitIndices[,3]) *
+    sft$fitIndices[,2],
+  labels = powers, 
+  col = "red"
+)
+abline(h= 0.8, col = "navy")
+
+# Plot 2: Mean Connectivity
+par(mar=c(1, 1, 1, 1))
+plot(
+  sft$fitIndices[,1],
+  sft$fitIndices[,5],
+  xlab = "Soft Threshold (power)",
+  ylab = "Mean Connectivity",
+  type = "n",
+  main = "Mean Connectivity")
+
+text(
+  sft$fitIndices[,1],
+  sft$fitIndices[,5],
+  labels = powers, 
+  col = "red")
+```
+
+### WGCNA: Call Adjacency Function
+
+```{r}
+library(WGCNA) # load package
+softPower <- 3 #pick soft_thresholding power based on Scale Independence graph
+```
+
+### WGCNA: Contruct Network and Detect Modules
+
+```{r}
+# Key points: 
+# blockwiseModules():
+# 1. Computers adjacency internally
+# 2. Computes TOM internally
+# 3. Hierarchically Clusters Genes
+# 4. Detect modules
+# 5. Merge similar modules
+net <- blockwiseModules(
+  datexpr, 
+  power = softPower, 
+  networkType = "signed",
+  minModuleSize = 50, 
+  maxBlockSize = 10000,
+  detectCutHeight = 0.995,
+  deepSplit = 2, 
+  mergeCutHeight = 0.25,
+  numericLabels = TRUE, 
+  pamRespectsDendro = FALSE,
+  saveTOMs = FALSE, 
+  verbose = 3
+)
+# test with different parameters, specifically with deepSplit and mergeCutHeight to produce ~12 modules (or another # of appropirate modules)
+```
+
+### WGCNA: Convert Numeric Labels to Colors for Visualization
+
+```{r}
+# view the colors
+table(net$colors)
+
+merged_colors <- labels2colors(net$colors)
+unmerged_colors <- labels2colors(net$unmergedColors)
+
+#Print table labeling with colors to numbers
+table(merged_colors)
+table(unmerged_colors)
+```
+
+### WGCNA: Plotting Dendrograms
+
+```{r}
+# plot the dendrograms with labels and given parameters
+plotDendroAndColors(
+  dendro = net$dendrograms[[1]],
+  colors = cbind(unmerged_colors, merged_colors),
+  groupLabels = c("Unmerged", "Merged"),
+  dendroLabels = FALSE, 
+  addGuide = TRUE,
+  hang = 0.03, 
+  guideHang = 0.05, 
+  main = "Single-Block Gene Dendrogram and Module Colors"
+)
+```
+
+### WGCNA: Module Eigengenes Identification
+
+```{r}
+# create eigengenes list
+MElist <- moduleEigengenes(datexpr, colors = net$colors)
+MEs <- MElist$eigengenes
+head(MEs)
+
+# save the data
+saveRDS(net, "data/WGCNA_network_RU25.rds")
+```
+
+### WGCNA: Cluster Eigengenes
+
+```{r}
+# cluster modules based on pairwise eigengenes correlation
+# merge modules that have similar expression profiles
+
+# calculate eigengene dissimilarity
+ME.dissimilarity = 1-cor(MElist$eigengenes, use="complete")
+
+# clustering eigengenes
+METree = hclust(as.dist(ME.dissimilarity), method = "average")
+par(mar = c(0,4,2,0)) #setting margin size
+par(cex = 0.6); #scaling graphics
+plot(METree)
+abline(h=0.4, col = "red") #line of 0.4 = correlation of 0.6
+```
+
+### WGCNA: Merge Modules
+
+```{r}
+# merge close modules with height cut with correlation coefficient of 0.75 or higher
+merge <- mergeCloseModules(datexpr, net$colors, cutHeight = .25)
+mergedColors = merge$colors
+mergeMEs = merge$newMEs
+```
+
+### WGCNA: External Trait Matching
+
+```{r fig.width = 20, fig.height = 12, dpi = 300}
+# create trait data collection
+traitData <- pheno |>
+  mutate(CollectionDate = as.Date(Date_Collected)) |>
+           left_join(env_master, by = "CollectionDate")
+locationMatrix <- model.matrix(~Location -1, data=traitData)
+monthMatrix <- model.matrix(~Month - 1, data = traitData)
+traitNumeric <- cbind(
+  locationMatrix, 
+  monthMatrix, 
+  traitData[, c(
+    "pH",
+    "Salinity",
+    "DO",
+    "Temperature")]
+)
+
+# correlate module eigengenes with traits
+mod_trait_cor <- cor(
+  MEs, 
+  traitNumeric, 
+  use = "pairwise.complete.obs"
+)
+mod_trait_pval <- corPvalueStudent(
+  mod_trait_cor, 
+  nSamples = nrow(datexpr)
+)
+textMatrix <- paste(
+  signif(mod_trait_cor, 2),
+  "\n(",
+  signif(mod_trait_pval, 1),
+  ")",
+  sep = ""
+)
+dim(textMatrix) <- dim(mod_trait_cor)
+
+# plot the heat map
+par(mar = c(8,10,3,3))
+
+labeledHeatmap(
+  Matrix = mod_trait_cor, 
+  xLabels = colnames(traitNumeric),
+  yLabels = names(MEs),
+  ySymbols = names(MEs),
+  colorLabels = FALSE, 
+  colors = blueWhiteRed(50), 
+  setStdMargins = FALSE, 
+  textMatrix = textMatrix, 
+  cex.text = 0.9, 
+  zlim = c(-1,1),
+  main = "Module-Trait Relationships"
+)
+```
+
+### GO: Load Packages
+
+```{r}
+# troubleshooting downloads
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+# BiocManager::install("biomaRt")
+# packageVersion("dplyr") #encountering issues w/ dyplr and biomaRt
+
+library(biomaRt)
+library(AnnotationDbi)
+library(goseq)
+```
+
+### GO: Matching Genes
+
+```{r}
+# load and strip gene and protein id from 2017 RU (reference mapping table)
+ru17_gene_protein <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/Cvi_RU17_ncbi_dataset/data/GCF_002022765.2/Cvi_RU17_gene_proteinID.csv",
+                              col_names = c("gene", "protein_id"))
+
+# load Diamond output results
+diamond_cols <- c(
+    "RU25_gene", "protein_id", "pident", "length", "mismatch",
+  "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore") #defining column names
+
+# contains ortholog prediction data
+diamond_out <- read_tsv("/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/diamond_results.txt", col_names = diamond_cols)
+
+# match genes naming
+diamond_out <-diamond_out |>
+  mutate(RU25_gene = str_replace(RU25_gene, "\\.model\\.", ".TU."))
+
+# joining genes id and protein
+# for each RU25 gene match, find RU17 gene name using protein_id
+joined_gene_ids <- diamond_out |>
+  left_join(ru17_gene_protein, by = "protein_id") |>
+  transmute(RU25_gene, ensembl_gene_id = gene)
+
+# save output
+write_csv(
+  joined_gene_ids, 
+  "/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/joined_gene_ids.csv"
+)
+```
+
+### GO: Establish Connection and Filter for Ensembl IDs
+
+```{r}
+# establish connection to Ensembl genes and RU17 genome dataset
+mart <- useMart("metazoa_mart",
+                dataset = "cvgca002022765v4_eg_gene", # old genome
+                host = "https://metazoa.ensembl.org")
+
+# pull GO ids associated with each genes in RU17
+attrs <- getBM(attributes = c("ensembl_gene_id", "transcript_length", "go_id", "namespace_1003"), mart = mart)
+
+# GO annotation table (IMPORTANT: Ensembl IDs only)
+gene2cat <- attrs %>%
+  filter(go_id != "") %>%
+  dplyr::select(ensembl_gene_id, go_id) %>%
+  as.data.frame()
+
+# gene lengths (Ensembl IDs only)
+gene_lengths <- attrs %>%
+  group_by(ensembl_gene_id) %>%
+  summarise(transcript_length = max(transcript_length, na.rm = TRUE)) %>%
+  as.data.frame()
+# create vectors to contain names
+length_vector <- gene_lengths$transcript_length
+names(length_vector) <- gene_lengths$ensembl_gene_id
+
+```
+
+### GO: Common Gene Intersections
+
+```{r}
+# --- create empty list to hold finals ---#
+joined_results <- list()
+all_length_vectors <- list()
+all_de_vector <- list()
+
+for (item in all_comps) {
+  # --- read individual file ---#
+  file_path <-paste0(deseq_out_dir, item)
+  res_df <- read_csv(file_path, show_col_types = FALSE)
+  
+  # ---left-join to add ENSEMBL IDs ---#
+  res_joined <- res_df %>%
+    left_join(joined_gene_ids, by = c("gene_id" = "RU25_gene")) |>
+    filter(!is.na(ensembl_gene_id),
+           !is.na(padj))
+  res_joined <- res_joined |>
+  dplyr::arrange(padj) |>
+  dplyr::group_by(ensembl_gene_id) |>
+  dplyr::slice(1) |>
+  dplyr::ungroup()
+  # --- build binary DE genes vector to match only genes with lengths --- #
+  genes_vector <- as.integer(res_joined$padj < 0.05 & !is.na(res_joined$padj))
+  names(genes_vector) <- res_joined$ensembl_gene_id
+  
+  # --- restrict vectors to overlap w/ DESeq result universe --- #
+  common_genes <- intersect(names(genes_vector),
+                            names(length_vector))
+  
+  # --- build separate vectors for common genes ---#
+  sub_DE_genes_vector <- genes_vector[common_genes]
+  sub_length_vector <- length_vector[common_genes]
+  
+  # --- sanity check validation --- #
+  stopifnot(length(sub_DE_genes_vector) == length(sub_length_vector))
+  stopifnot(all(names(sub_DE_genes_vector) == names(sub_length_vector)))
+  
+  # --- Save vectors to empty lists created --- #
+  all_length_vectors[[item]] <- sub_length_vector
+  all_de_vector[[item]] <- sub_DE_genes_vector}
+```
+
+### GO: Running Goseq()
+
+```{r}
+# set path
+goseq_out_dir <- "/work/clh162/Data+/Anna/2025-2026-team-code-az199/Data+_team/Anna/goseq_results_RU25/"
+if(!dir.exists(goseq_out_dir)) dir.create(goseq_out_dir, recursive = TRUE)
+
+# create loop for each comparison
+for (item in all_comps) {
+  # --- 1) Extract DE and length vectors needed for this iteration --- #
+  DE_genes_vector <- all_de_vector[[item]]
+  length_vector <- all_length_vectors[[item]]
+  
+  # --- 2) fit Probability Weighting Function (PWF) to account for gene length biases --- #
+  pwf <- nullp(DE_genes_vector, 
+               bias.data = length_vector, 
+               plot.fit = FALSE) #rejects plots in console
+ 
+   # --- 3) run goseq --- #
+  GO.wall <- goseq::goseq(pwf = pwf,
+                   gene2cat = gene2cat,
+                   use_genes_without_cat = FALSE)
+ 
+   # --- 4) apply multiple testing correction method of Benjamini-Hochberg (BH) to control the False Discovery Rate (FDR) (aka limit type II errors) --- #
+  GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method = "BH")
+  
+  # --- 5) Filter for significant terms (e.g., padj < 0.05) --- #
+  enriched_GO <-GO.wall |>
+    filter(padj < 0.05)
+    # zero GO terms are significantly abundant
+  
+  # --- 6) save goseq results to .csv file --- #
+  clean_name <- sub("^res_", "", item)
+  file_out_path <- file.path(goseq_out_dir, paste0("GO_", clean_name, ".csv")) #define the way path is written out
+  write_csv(GO.wall, file = file_out_path)
+  
+  # Plot top 10 significant GO terms
+ p <- GO.wall |>
+  mutate(
+    hitsPerc = (numDEInCat * 100) / numInCat,
+    log10_p  = -log10(pmax(over_represented_pvalue, .Machine$double.xmin))
+  ) |>
+  # 2. sort the entire data frame by the p-value
+  arrange(over_represented_pvalue) |>
+  # 3. keep only the top 10 most significant terms
+  slice_head(n = 10) |>
+  # 4. lock in the factor levels so ggplot preserves the order on the Y-axis
+  mutate(term = factor(term, levels = rev(unique(term)))) |>
+  # 5. pass it cleanly into ggplot
+  ggplot(aes(x = hitsPerc, 
+             y = term,             # Handled reordering in step 4 via factor levels
+             colour = log10_p, 
+             size = numInCat)) +   
+  geom_point() +
+  expand_limits(x = 0) +
+  labs(title = clean_name, x = "Hits (%)", y = "GO term",
+       colour = "-log10(p-value)", size = "Count") +
+  theme_minimal()
+ print(p)
+ ggsave(
+  filename = file.path(
+    goseq_out_dir,
+    paste0(clean_name, "_GOplot.png")
+  ),
+  plot = p,
+  width = 8,
+  height = 6,
+  dpi = 400)} # save plots
+```
