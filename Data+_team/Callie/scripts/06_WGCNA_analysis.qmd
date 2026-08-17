@@ -1,0 +1,320 @@
+---
+title: "WGCNA analysis"
+author: "Callie Hundley"
+format: 
+  html:
+    df-print: paged 
+    code-fold: true 
+    code-tools: true
+editor: visual
+---
+
+# Source citation
+
+The following informational materials were used in constructing the pipeline outlined in this quarto document:
+
+* [Bioinformatics workbook: Network analysis with WGCNA](https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0)
+* [WGCNA Step-by-step Tutorial - Part 1](https://youtu.be/gYE59uEMXT4?si=ll_pBKd00fDDIsbz)
+* [WGCNA Step-by-step Tutorial - Part 2](https://youtu.be/mzXIxjPr_Mc?si=JeVZEtXsFYwCuCdT)
+
+# Weighted Gene Co-expression Network Analysis (WGCNA)
+
+A subsequent reasonable step in our analysis is to run a WGCNA. When we run this on our significantly differentially expressed genes, it will create clusters/modules of similarly expressed (or co-expressed) genes. This can be helpful as it will direct us into interesting genes to look at for additional analysis like gene ontology (GO) classification, instead of starting with our thousands of initial genes.
+
+What we need to do here:
+
+-   Construct a correlation network, calculate soft thresholds, and group genes into modules.
+-   Correlate with Traits: Identify which gene modules correlate with your experimental conditions (in our case location, month, or environmental conditions) or phenotype (i.e. mortality, but we don't have much of that in these samples).
+
+## Load packages 
+
+```{r, warning=FALSE}
+# Install the Bioconductor manager if you don't have it
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+    #install.packages("BiocManager")
+library(BiocManager)
+# Install required Bioconductor dependencies
+#BiocManager::install(c("BiocGenerics", "AnnotationDbi", "GO.db", "preprocessCore", "impute"))
+
+#install.packages("WGCNA")
+library(WGCNA)
+library(tidyverse)
+library(DESeq2)
+#devtools::install_github("kevinblighe/CorLevelPlot")
+library(CorLevelPlot)
+library(readr)
+library(readxl)
+```
+
+
+## Load and prepare data 
+
+### Gene expression data 
+
+```{r}
+# Reload saved DESeq2 dataset object 
+# if using unfiltered DESeqResults object
+# dds <- readRDS("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/count_dds.rds")
+
+# if using filtered DESeqResults object  
+dds_filtered <- readRDS("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/DESeqResults_Objects/DESeqResults_dds_filtered.rds")
+```
+
+### Metadata (traits)
+
+```{r}
+coldata <- read_excel("/work/clh162/OysterRNA24/xRNA for BC Summer 2024.xlsx",
+                      col_types = c("text", "text", "text", "text", "text", "date", "date", "numeric", 
+                                    "numeric", "numeric", "numeric"),
+                      skip = 2) %>% #skipping first two rows of .xls file
+            column_to_rownames(var = "Sample_ID") %>% #assigning the sample names as the row names 
+            mutate(month_collected = month(Date_Collected, 
+                                           label = TRUE, 
+                                           abbr = FALSE)) # creating streamlined column for graphing/analysis by date
+```
+
+### Environmental data (traits)
+
+```{r}
+# SOPHIE'S IS INCORRECT!!! LOAD OWN ENVIRONMENTAL DATA FROM environmental_data.qmd document! 
+env_data <- readRDS("/work/clh162/Data+/Sophie/2025-2026-team-code-sac165/Data+_team/Sophie/env_data.rds") 
+env_mat <- env_data[, c("Temp_7d_Avg", "Salinity_7d_Avg", "DO_7d_Avg", "pH_7d_Avg")]
+rownames(env_data) <- rownames(col_data)
+```
+
+
+## Quality control check -- Outliers 
+
+We can use the function `goodSamplesGenes()` to detect outliers in our count data. Requires the input data have samples assigned to rows position and genes assigned to the columns position. Since our count data is in the reverse format in the dds object, we can transpose our data using the `t()` function which flips the rows and columns of the dataset.
+
+```{r}
+goodSamplesGenes(t())
+```
+
+
+## Normalize count data  
+
+We will use normalized gene counts for our WGCNA analysis. We can use variance stabilization to transform our counts to normalized counts. Again we also need to get these normalized counts into the format where samples are the rows and genes are in the columns position. 
+
+```{r}
+dds_norm <- vst(dds, blind = TRUE) # default for blind = is TRUE -- leave as is 
+
+# the normalized counts are stored in the assay() of the dds_norm object 
+head(assay(dds_norm))
+
+# transpose normalized data and save as matrix 
+norm.counts <- assay(dds_norm) %>% 
+  t() # transpose function 
+```
+
+## Construct weighted correlation matrix 
+
+### Determine soft threshold 
+
+First we need to pick the power level which will produce a weighted correlation matrix that is most similar to a scale free network topology. 
+
+```{r}
+# create a vector of soft-thresholding powers for selection 
+power <- c(c(1:10), seq(from = 12, to = 20, by = 2))
+
+# use network topology analysis function for each power level
+sft <- pickSoftThreshold(data = norm.counts,
+                  powerVector = power,
+                  networkType = "signed",
+                  verbose = 5)
+
+# pull out data for deciding which power produces highest similarity to a scale free topology
+sft.data <- data.frame(sft$fitIndices)  
+  # will use two values from here: 
+    # SFT.R.sq
+    # mean.k = mean connectivity 
+      # want to pick the power that provides the maximum R.sq value and minimum mean.k
+
+# create visualization to help pick which power level to use 
+# plot for SFT.R.sq
+R.sq.plot <- ggplot(data = sft.data, 
+                    aes(x = Power, y = SFT.R.sq, label = Power)) +
+  geom_point() + 
+  geom_text(nudge_y = 0.1) +
+  geom_hline(yintercept = 0.8, color = "red") +
+  labs(x = "Power",
+       y = "Scale free topology model fit, signed R^2") + 
+  theme_classic()
+
+# plot for mean.k
+mean.k.plot <- ggplot(data = sft.data, 
+                      aes(x = Power, y = mean.k., label = Power)) + 
+  geom_point() + 
+  geom_text(nudge_y = 0.1) +
+  labs(x = "Power",
+       y = "Mean Connectivity") + 
+  theme_classic()
+
+# display plots together 
+grid.arrange(R.sq.plot, mean.k.plot, nrow = 2)
+```
+
+Looking at these plots together, ideally we should select a power value that has a R^2 value greater than 0.8 (above the red line we added) but not excessively large as well as minimal mean connectivity. 
+
+
+Next we need to convert our matrix of normalized counts to numeric format to run the `blockwiseModules()` function. 
+
+```{r}
+norm.counts[] <- sapply(norm.counts, as.numeric)
+
+# set the assigned power we picked above
+soft_power <- # 
+
+temp_cor <- cor
+
+cor <- WGCNA::cor # Force it to use WGCNA cor function (fix a namespace conflict issue)
+
+# memory estimate w.r.t. blocksize 
+bwnetwk <- blockwiseModules(data = norm.counts, # input 
+                  # -- Adjacency Function -- #
+                 maxBlockSize = 5000, # how many genes maximum you want to be included in each module, default is 5,000
+                 TOMType = "signed",
+                 power = soft_power, # power value we just assigned above
+                 mergeCutHeight = 0.25, # will merge/cluster seperate modules that have > 75% correlations together  
+                 numericLabels = FALSE, # want the module eigengene labels to be colors instead of the # of genes 
+                 randomSeed = 1234, # set randomSeed for reproducability
+                 verbose = 3) 
+
+cor <- temp_cor
+
+# Save blockwise network object to RDS file
+saveRDS(bwnetwk, file = "/work/clh162/OysterRNA24/DEG_analysis/WGCNA/wgcna_results.rds")
+```
+
+## Identify gene modules  
+
+Let's look at the resulting **Module Eigengenes** that are returned from the `blockwiseModules()` function. Based on the dissimilarity values of these modules (distance between the module eigengenes), we can cluster/merge similar modules together. 
+
+```{r}
+# return the module eigengene information from the variable storing our blockwiseModules() function 
+module_eigengenes <- bwnetwk$MEs
+
+# Print the top of the Module Eigengenes results 
+head(module_eigengenes)
+
+# return number of genes in each module
+table(bwnetwk$colors)
+
+# visualize clustering of modules with a dendrogram both before and after merging modules (based on 75% similarity)  
+plotDendroAndColors(bwnetwk$dendrograms, 
+                    cbind(bwnetwk$unmergedColors, bwnetwk$colors),
+                    c("unmerged", "merged"),
+                    dendroLabels = FALSE,
+                    addGuide = TRUE,
+                    hang = 0.03,
+                    guideHang = 0.05
+                    )
+
+```
+
+Because we have fewer modules (colors) post merging, we will use the merged modules to perform further downstream analysis.
+
+## Additional analyses 
+
+### Correlate modules with pheontypes/traits
+
+Now that we have created modules and merged similar modules, the next good step of analysis would be to see how the modules relate to traits in our samples. In other words, **which modules have significant association with a trait of interest?** 
+
+In order to investigate this question, we have to binarize any categorical trait variables that we want to check their associations with to our module eigengenes. Remember that our trait (metadata) associated with our samples is stored in the object `coldata`. 
+
+```{r}
+traits <- coldata %>% 
+  mutate(location_bin = ifelse(grepl("DAF", Location), 1, 0)) %>% 
+  select() # select just that binarized column
+
+# combine all binarized trait data into one dataframe 
+traits <- cbind(traits, )
+```
+
+#### Calculate correlation + p-values 
+
+Now we can combine our binarized trait data with the gene module results and calculate the correlation and p-values.
+
+```{r}
+# Define numbers of samples and genes 
+nSamples <- nrow(norm.counts)
+nGenes <- ncol(norm.counts)
+
+# calculate correlation between module eigengenes and traits using the cor() function
+module.trait.corr <- cor(module_eigengenes, traits, use = "p")
+module.trait.corr.pvals <- corPvalueStudent(module.trait.corr, nSamples)
+
+```
+
+#### Create heatmap 
+
+Finally we can visualize these module-trait associations using a heatmap.
+
+```{r}
+# create dataframe that combines module_eigengenes and trait data into one place 
+heatmap.data <- merge(module_eigengenes, traits, by = "row.names")
+
+heatmap.data <- heatmap.data %>% 
+  column_to_rownames(var = "row.names") # make sure the first column is read as the row names, not as a column (CorLevelPlot() will be mad because it only takes categorical variables that are binarized!)
+
+# create heatmap
+CorLevelPlot(data = heatmap.data,
+             x = names(heatmap.data)[#:#], # columns on x-axis: trait values 
+             y = names(heatmap.data)[#:#], # columns on y-axis: modules 
+             col = c("blue1", "skyblue", "white", "pink", "red"))
+```
+
+After identifying what modules are highly associated with different traits, we can investigate the genes that are present within these modules to try to understand mechanistically what might be driving these associations. 
+
+First we can extract the genes associated with each module. 
+
+```{r}
+module.gene.mapping <- as.data.frame(bwnetwk$colors)
+
+# filter this assignment list of genes for a given module of interest 
+module.gene.mapping %>% 
+  filter(bwnetwk$colors == "turquoise") %>% # specify module 
+  rownames()
+```
+
+### Identify driver genes 
+
+#### Calculating module membership 
+
+We can identify highly connected "hub" genes within a single module of interest by calculating the **module membership** and associated p-values. The module membership/intramodular connectivity is calculated as the correlation of the model eigengenes and the (normalized) gene expression profile. In other words, module membership quantifies the similarity of all genes expressed to every module. 
+
+```{r}
+# calculate the module membership measures and the associated p-values 
+module.membership.measure <- cor(x = module_eigengenes, 
+                                 y = norm.counts, 
+                                 use = "p") # using Person correlation
+module.membership.measure.pvals <- corPvalueStudent(module.membership.measure, nSamples)
+```
+
+By looking at the module membership measures and their p-values, we can determine which genes have significantly high membership (importance) within a given module of interest. We can subsequently extract those genes to further look into them. 
+#### Calculating gene significance 
+
+We can also identify genes highly associated with a given trait of interest by calculating **gene significance** and associated p-values. Gene significance is calculated as the correlation of the (normalized) gene expression profile and trait of interest. 
+
+```{r}
+gene.signf.measure <- cor(x = norm.counts,
+                                 y = traits$#PICKONE_HERE,
+                                 use = "p") # using Person correlation
+gene.signf.measure.pvals <- corPvalueStudent(gene.signf.measure.pvals, nSamples)
+
+# take a look at resulting correlations 
+gene.signf.measure.pvals %>% 
+  as.data.frame() %>% 
+  arrange(p-valuecolumn) %>% # replace with the name of the column containing p-values in the object -- this line displays p-values from smallest to largest
+    head(25) # return top 25 genes
+```
+
+We can subsequently extract these gene names and perform downstream analysis like looking at their gene symbols and run GO enrichment. 
+
+# Note on methods to associate module eigengenes (continuous variable) with sample traits (categorical variables)
+
+There are multiple methods you can use to test association of these two datasets. 
+
+But regardless of which method you use (e.g. running a student t-test, pearson correlation, or using a linear model) ultimately you are going to get the same list of modules to be significantly associated with the trait of interest. 
+
+
