@@ -20,9 +20,9 @@ library(readxl)
 library(readr)
 library(tibble)
 # BiocManager::install("DESeq2") # <- install only once!
-#library(DESeq2)
+library(DESeq2)
 # BiocManager::install("pheatmap") # <- install only once 
-#library(pheatmap)
+library(pheatmap)
 # BiocManager::install("ComplexHeatmap")
 library(ComplexHeatmap)
 library(RColorBrewer)
@@ -291,7 +291,7 @@ To make that last PCA a little more clear, we can create our own annotated PCA p
 
 ```{r}
 # Save data from interaction PCA plot
-pca_vst_interaction <- plotPCA(vst, 
+pca_vst_interaction <- plotPCA(vst_countdata, 
                                intgroup = c("Location", "month_collected"), 
                                ntop = 500,
                                returnData = TRUE)   # This argument tells R to return the PCA values 
@@ -369,7 +369,7 @@ ggsave("hierarchical_clustering_vst_data.png", plot = hierarchical_clustering_pl
 
 Before running differential expression analysis, it is good to omit genes that have little or no chance of being detected as differentially expressed. This will increase the power to detect differentially expressed genes.
 
-The `DESeq2` program actually removes genes with `0` count across all samples, those with low mean normalized ocunts, and outliers automatically, but you definitely need to make sure to run this step if you are using a different differential expression program (for example: `EdgeR`) which doesn't automatically take care of this.
+The `DESeq2` program actually removes genes with `0` count across all samples, those with low mean normalized counts, and outliers automatically, but you definitely need to make sure to run this step if you are using a different differential expression program (for example: `EdgeR`) which doesn't automatically take care of this.
 
 People will use different thresholds for this step, but let's remove all genes that lack counts greater than 10 in a minimum of 3 of our samples (this seems to be a very minimal threshold).
 
