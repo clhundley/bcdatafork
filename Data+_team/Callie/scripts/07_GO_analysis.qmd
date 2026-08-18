@@ -140,21 +140,25 @@ RU17_RU25_gene_IDs <- left_join(x = RU17_to_RU25_diamond,
                              ) %>% 
   select(RU25_gene, protein_id, gene)
 
+# rename the older gene name/ID so more clear in final file 
+RU17_RU25_gene_IDs <- RU17_RU25_gene_IDs %>% 
+   dplyr::rename(RU17_gene = gene)
+
 # Save this subset dataset for analysis of DEG results data
 write_csv(RU17_RU25_gene_IDs,
           file = "RU17_RU25_gene_IDs",
-          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/RU17_RU25_gene_IDs")
+          path = "/work/clh162/OysterRNA24/DEG_analysis/GO/diamond/RU17_RU25_gene_IDs")
 ```
 
 Now we have the list that helps us correspond the 2017 sequenced genome ENSEMBL gene names to the 2025 sequenced genome gene names. For each group of our DE analysis results that we want to run through GO, we can use this file to add the old ENSEMBL gene IDs into our `results()` output pre-GO analysis. With these ENSEMBL gene IDs assigned, we can pair corresponding GO terms to our DE genes!
 
 Now that we have homologous gene IDs and information about the gene annotations from the `DIAMOND` program and gene name matching, we can carry out our **GO analysis**.
 
-# GO analysis
+# GO analysis (preparation)
 
 Like for the other steps in our pipeline, there are a lot of different packages that can be used to conduct GO analysis. Here, we are going to try using the `goseq()` command from the `goseq` package.
 
-First, let's load all the packages we need.
+First, let's install and load all the packages/libraries we need.
 
 ```{r}
 # Installing packages -- RUN THIS CODE CHUNK ONCE 
@@ -188,6 +192,80 @@ Was getting the following error when trying to load `biomaRt` so then ran the fo
 #BiocManager::install("biomaRt")
 ```
 
+## GO for WGCNA blue module 
+
+From our WGCNA results (see `06_WGCNA.qmd`) we had one module (Blue) that showed up having nominaly significant correlations with three different traits (August, Salinity, and Conductivity). Let's run GO enrichment analysis on the genes in this module! 
+
+### Pull out genes associated with blue module 
+
+```{r}
+# first checking that the names of the genes are stored in the (1) matrix of our top 10% (0.1) DEGs (datExpr_top) and (2) our returned blockwiseModules() object with each module 
+head(colnames(datExpr_top))
+head(names(bwnetwk$colors))
+
+all(names(bwnetwk$colors) == colnames(datExpr_top)) #TRUE
+
+# pulling out genes associated with 
+# in creating bwnetwk, I used `numericLabels = FALSE`, therefore, the `bwnetwk$colors` contains the color assigned to each gene
+blue_genes <- names(bwnetwk$colors)[bwnetwk$colors == "blue"]
+
+# check length (# genes)
+length(blue_genes)
+
+# convert blue genes list into a data frame to use in GO-enrichment analysis 
+blue_genes_df <- data.frame(blue_genes = blue_genes)
+
+# save blue module genes data frame 
+write.csv(blue_genes_df, 
+          "/work/clh162/OysterRNA24/DEG_analysis/WGCNA/bluemodule_genes.csv")
+```
+
+### Pull out background genes for reference 
+
+This works because for GO enrichment, we are essentially asking: "Are particular GO terms overrepresented among the genes in my blue module compared with the genes that were available to be placed into modules?"
+
+Therefore, the universe of background genes should generally be the top 10% DEG (2,133 genes) pulled and used in the WGCNA.
+
+```{r}
+# get background genes list 
+background_genes <- colnames(datExpr_top)
+
+# check length (# genes)
+length(background_genes)
+
+# convert background genes list into a data frame to use in GO-enrichment analysis 
+background_genes_df <- data.frame(background_genes = background_genes)
+
+# save background genes data frame  
+write.csv(background_genes_df, 
+          "/work/clh162/OysterRNA24/DEG_analysis/WGCNA/bluemodule_background_genes.csv")
+
+```
+
+So, as our final lists of genes for this analysis we have:
+
+* Target list: 105 blue-module genes
+* Background/universe: all 2,133 genes that were eligible to enter WGCNA, including those 105 blue genes
+  * It is important to leave the blue module associated genes in this list for an over-representation analysis (because again we are asking the question: "Given that I had 2,133 genes available, are particular GO terms represented among my 105 blue genes more often than would be expected by chance?")
+  
+### Connect GO terms 
+
+```{r}
+# run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
+blue_genes <- left_join(x = blue_genes,
+          y = RU17_RU25_gene_IDs,
+          by = join_by(gene_id == RU25_gene)) # column names for RU25 genes are different between the two data sets 
+res_0.05_DAF_vs_CMT_July
+
+# how many of our DE genes don't have a homologous match (ENSEMBL ID) in the RU17 genome? 
+res_0.05_DAF_vs_CMT_July %>% filter(is.na(gene)) # still 2,123 genes don't have homologous match (ENSEMBL ID)
+```
+
+
+## NOTE -- Also pull larger background list (all genes that were run through DESeq) and run GO Enrichment with this larger background as well 
+
+# GO analysis for pairwise DEGs
+
 ## DAF vs. CMT June
 
 Let's load + prepare to run our results of differential gene expression between Duke Aquafarm (DAF) and CMAST farm (CMT) in June through the GO enrichment analysis pipeline.
@@ -201,9 +279,6 @@ First we will load the saved results `.csv` file and add the gene name translati
 res_0.05_DAF_vs_CMT_June <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/DESeq2/res_0.05_DAF_vs_CMT_June")
 # check structure
 head(res_0.05_DAF_vs_CMT_June)
-
-# load old to new gene ID file for ENSEMBL ID communication
-RU17_RU25_gene_IDs <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/RU17_RU25_gene_IDs")
 
 # run a left_join() to get all the ENSEMBL gene names added to all the genes in this results set 
 res_0.05_DAF_vs_CMT_June <- left_join(x = res_0.05_DAF_vs_CMT_June,
@@ -336,11 +411,8 @@ write_csv(GO.wall,
           file = "GOres_0.05_DAF_vs_CMT_June",
           path = "/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June")
 
-# Load results dataset 
-GOres_0.05_DAF_vs_CMT_June <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June")
-
-# Load results from Sophie's text files 
-GOres_0.05_DAF_vs_CMT_June_Sophiecount <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June_Sophiecount")
+# Load this results dataset 
+# GOres_0.05_DAF_vs_CMT_June <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/GO/goseq_results/GOres_0.05_DAF_vs_CMT_June")
 ```
 
 ## DAF vs. CMT July

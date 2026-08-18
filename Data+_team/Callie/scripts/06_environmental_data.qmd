@@ -12,14 +12,10 @@ editor: visual
 # Environmental Regression Analysis
 
 ### Purpose:
+
 Test whether environmental conditions are associated with WGCNA module eigengenes and selected gene-expression patterns.
 
-Analysis order:
-1. Prepare sample-level environmental data
-2. Explore environmental variables
-3. Run module-level linear regressions
-4. Identify the strongest module-environment associations
-5. Examine selected genes using VST-normalized expression
+Analysis order: 1. Prepare sample-level environmental data 2. Explore environmental variables 3. Run module-level linear regressions 4. Identify the strongest module-environment associations 5. Examine selected genes using VST-normalized expression
 
 ### Load Packages
 
@@ -34,13 +30,13 @@ library(lubridate)
 
 ## 1. Prepare sample-level environmental data
 
-We will use a 7-day (week) window leading up to the date of collection of the tissue samples as our reference for our environmental data for a more accurate representation of environmental conditions at time of sampling. This seven day window will be the date of collection and the six days preceding it. 
+We will use a 7-day (week) window leading up to the date of collection of the tissue samples as our reference for our environmental data for a more accurate representation of environmental conditions at time of sampling. This seven day window will be the date of collection and the six days preceding it.
 
-### Load 2024 environmental cleaned data 
+### Load 2024 environmental cleaned data
 
-Here, we are loading the cleaned excel files containing our environmental data across the sites where our data sensors were placed for the BASS Connections project. Most of these files (salinity, pH, and DO) contain a column with the site that the logger data is associated with. However, for the precipitation data, this file isn't specific to just one site; it is for a general area that includes both of the sites being compared in this specific analysis.  
+Here, we are loading the cleaned excel files containing our environmental data across the sites where our data sensors were placed for the BASS Connections project. Most of these files (salinity, pH, and DO) contain a column with the site that the logger data is associated with. However, for the precipitation data, this file isn't specific to just one site; it is for a general area that includes both of the sites being compared in this specific analysis.
 
-We are also standardizing our date column to follow the format of Date (without time) so they all match using the `as.Date()` function. Then we can get an average measurement of a given parameter for each day and use that to get our 7-day average. 
+We are also standardizing our date column to follow the format of Date (without time) so they all match using the `as.Date()` function. Then we can get an average measurement of a given parameter for each day and use that to get our 7-day average.
 
 ```{r}
 # salinity 
@@ -74,7 +70,7 @@ precip_2024 <- read_excel("/work/clh162/Data+/Callie/bcdatafork/Precip_2024.xlsx
 
 ```
 
-Finally, if you don't already have your column data (sample metadata) loaded from earlier in the pipeline, you can reload it here as well -- we need this dataframe to identify which dates are the collection date for each tissue sample. 
+Finally, if you don't already have your column data (sample metadata) loaded from earlier in the pipeline, you can reload it here as well -- we need this dataframe to identify which dates are the collection date for each tissue sample.
 
 ```{r}
 # coldata <- read_excel(
@@ -123,10 +119,9 @@ event_windows <- collection_events %>%
   tidyr::unnest(Date)
 ```
 
+### Create functions to return means of environmental parameters for each day
 
-### Create functions to return means of environmental parameters for each day 
-
-Creating a "safe mean" -- using available values (bypassing NA values) when present and only returning `NA` for a day if there was absolutely no data logged for that variable. 
+Creating a "safe mean" -- using available values (bypassing NA values) when present and only returning `NA` for a day if there was absolutely no data logged for that variable.
 
 ```{r}
 safe_mean <- function(x) {
@@ -138,7 +133,7 @@ safe_mean <- function(x) {
 }
 ```
 
-Additionally, for our precipitation values, we will want to be able to calculate total precipitation without running into an issue of `NA` values --> so we can create a "safe max" that bypasses NA values, because our precipitation data is given in cumulative values for each day. 
+Additionally, for our precipitation values, we will want to be able to calculate total precipitation without running into an issue of `NA` values --\> so we can create a "safe max" that bypasses NA values, because our precipitation data is given in cumulative values for each day.
 
 ```{r}
 safe_max <- function(x) {
@@ -150,8 +145,7 @@ safe_max <- function(x) {
 }
 ```
 
-
-### Salinity / conductivity 
+### Salinity / conductivity
 
 Goal: calculate 7-day average of salinity for the 7 days before the collection dates, at each site.
 
@@ -194,8 +188,6 @@ event_window_data <- event_windows %>%
 
 ```
 
-
-
 ### pH
 
 Goal: calculate 7-day average of pH for the 7 days before the collection dates, at each site.
@@ -234,8 +226,7 @@ event_window_data <- event_window_data %>%
   by = c("Farm", "Date"))
 ```
 
-
-### Dissolved oxygen 
+### Dissolved oxygen
 
 Goal: calculate 7-day average of DO for the 7 days before the collection dates, at each site.
 
@@ -271,8 +262,7 @@ event_window_data <- event_window_data %>%
   by = c("Farm", "Date"))
 ```
 
-
-### Precipitation 
+### Precipitation
 
 ```{r}
 # check that precipitation data is cumulative + RESETS between each day 
@@ -313,9 +303,9 @@ event_window_data <- event_window_data %>%
   by = c("Date")) # same precip assigned to both sites (not site-specific data)
 ```
 
-### Temperature 
+### Temperature
 
-Now that we have mean values of temperature also pulled for each of our event window days from our three loggers, we can take the average of them and use that as our reference column for `temperature_daily_mean` in our `event_window_data`. 
+Now that we have mean values of temperature also pulled for each of our event window days from our three loggers, we can take the average of them and use that as our reference column for `temperature_daily_mean` in our `event_window_data`.
 
 ```{r}
 event_window_data <- event_window_data %>% 
@@ -336,7 +326,7 @@ event_window_data <- event_window_data %>%
   )
 ```
 
-#### Save event window environmental data 
+#### Save event window environmental data
 
 ```{r}
 write_csv(event_window_data,
@@ -347,14 +337,13 @@ write_csv(event_window_data,
 event_window_data <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/WGCNA/collection_event_window_env_data.csv")
 ```
 
-
-## **Investigating any gaps in environmental data during collection period** 
+## **Investigating any gaps in environmental data during collection period**
 
 A reminder that for downstream analysis, we want 7-day windows of data to calculate mean values of environmental parameters associated with our six tissue collection dates (and gene expression of associated with these dates/samples).
 
 We should aim to only fill gaps when we absolutely need to for our analysis (i.e. when we have NO data in the collection window). For our 7-day window, it would be better to have less data points covering the 7 days (need ideally 3) and use those to get the "7-day average" for environmental traits to run in our downstream analysis than to interpolate across the entire range and use (up to all 7 interpolated points) to calculate the average (because this would be **artificially shrinking our standard deviation**). Therefore, we will only use interpolation to fill in gaps where we have **NO** coverage for an environmental parameter in the whole 7-day collection window.
 
-We can use an interpolation to do this. The `zoo` package in R (which stands for "Z's ordered observations") can be used to fill gaps in timeseries data with interpolation (e.g. linear, spline). We load that here first, and then begin this process. 
+We can use an interpolation to do this. The `zoo` package in R (which stands for "Z's ordered observations") can be used to fill gaps in timeseries data with interpolation (e.g. linear, spline). We load that here first, and then begin this process.
 
 ```{r}
 # Install zoo package only if zoo is not already available
@@ -366,7 +355,7 @@ We can use an interpolation to do this. The `zoo` package in R (which stands for
 library(zoo)
 ```
 
-Checking for gaps in environmental parameters during 7-day timeframe of data collection 
+Checking for gaps in environmental parameters during 7-day timeframe of data collection
 
 ```{r}
 missing_window_values <- event_window_data %>%
@@ -413,16 +402,15 @@ missing_window_values
 
 ```
 
-From here, we can see that most of the 7-day spans have missing value gaps that are ~3-4 days long. Here, I am prioritizing having 3 points (days) with data in that 7-day span to have a baseline standard sample size to estimate the mean. Therefore, we should have two steps moving forward:
+From here, we can see that most of the 7-day spans have missing value gaps that are \~3-4 days long. Here, I am prioritizing having 3 points (days) with data in that 7-day span to have a baseline standard sample size to estimate the mean. Therefore, we should have two steps moving forward:
 
-(1) let's interpolate (linearly -- because spline might infer excess variation that may not have happened) only for the groups that have 2 or fewer days adding to their calculated mean value. We can use the `na.approx()` function from the `zoo` package to run a linear interpolation.  
+(1) let's interpolate (linearly -- because spline might infer excess variation that may not have happened) only for the groups that have 2 or fewer days adding to their calculated mean value. We can use the `na.approx()` function from the `zoo` package to run a linear interpolation.
 
-(2) Calculating a mean value in the 7 days leading up to sample collection using the **observed** values (and noting how many values are available/used to calculate this mean) --> can call this the **available-observation 7-day mean** (`mean_parameter_7d_observed`): Mean of observed pH measurements occurring within the seven days preceding and including tissue collection.
-
+(2) Calculating a mean value in the 7 days leading up to sample collection using the **observed** values (and noting how many values are available/used to calculate this mean) --\> can call this the **available-observation 7-day mean** (`mean_parameter_7d_observed`): Mean of observed pH measurements occurring within the seven days preceding and including tissue collection.
 
 ## Interpolation to fill large pH gap
 
-The only instance of a gap that spans all 7 days leading up to sample collection is for the pH data at the CMAST (CMT) site with the August sample. 
+The only instance of a gap that spans all 7 days leading up to sample collection is for the pH data at the CMAST (CMT) site with the August sample.
 
 ```{r}
 missing_window_values %>% 
@@ -430,7 +418,7 @@ missing_window_values %>%
          Date_Collected == "2024-08-19")
 ```
 
-First, let's start by looking at the trends of our pH data (over the course of the entirety of the logged data we do have for the CMT site). This can help give us a good idea of the type of model to use to interpolate the data in this gap.  
+First, let's start by looking at the trends of our pH data (over the course of the entirety of the logged data we do have for the CMT site). This can help give us a good idea of the type of model to use to interpolate the data in this gap.
 
 #### Determining best-approach
 
@@ -478,7 +466,7 @@ ggplot(cmt_ph, aes(x = Date, y = pH_daily_mean)) +
   )
 ```
 
-Let's make one more zoomed in plot 
+Let's make one more zoomed in plot
 
 ```{r}
 ggplot(cmt_ph, aes(x = Date, y = pH_daily_mean)) +
@@ -542,10 +530,9 @@ bind_rows(
 )
 ```
 
-
 We can see that these three sized groups of days results in very similar mean and standard deviation values. But the graph suggests that much of that lower "after" mean is coming from the decline occurring after August 24, rather than necessarily indicating that pH was already lower during August 13–19. So, because...
 
-(1) there is not much of a different in mean/sd of pH values between the different sized groups of days before/after gap 
+(1) there is not much of a different in mean/sd of pH values between the different sized groups of days before/after gap
 
 (2) we want to make as-few-assumptions as possible
 
@@ -553,9 +540,9 @@ and (3) want to limit the visible decline seen post-August-24 from influencing b
 
 the conceptual and defensible model to use in this case can be a **linear interpolation** using the **singular** dates pre and post this collection window.
 
-Now, let's run the linear interpolation (since there is no mingap argument for the `na.approx()` function, it will compute the interpolation for all the missing values, but later in our calculation of 7d means, we can control when to use/ignore the interpolation values to make sure they are ONLY used for this large gap). 
+Now, let's run the linear interpolation (since there is no mingap argument for the `na.approx()` function, it will compute the interpolation for all the missing values, but later in our calculation of 7d means, we can control when to use/ignore the interpolation values to make sure they are ONLY used for this large gap).
 
-#### Linear interpolation 
+#### Linear interpolation
 
 ```{r}
 # execute the linear interpolation 
@@ -614,9 +601,7 @@ write_csv(event_window_data_filled,
 event_window_data_filled <- read_csv("/work/clh162/OysterRNA24/DEG_analysis/WGCNA/collection_event_window_env_data_ph_interp.csv")
 ```
 
-
-## Calculating 7-day means w/observed and interpolated data 
-
+## Calculating 7-day means w/observed and interpolated data
 
 ```{r}
 summary_env_traits <- event_window_data_filled %>%
@@ -743,10 +728,10 @@ write_csv(summary_env_traits,
 ```
 
 
- 
- 
- 
- 
+
+
+
+
 
 
 
@@ -754,17 +739,15 @@ write_csv(summary_env_traits,
 
 ## Interpolation to fill small gaps (AS OF 8/13 NOT running this code - instead just runing one larger interpolation for a singular full 7 day gap w/CMT August collection date)
 
+##### Salinity / conductivity
 
-##### Salinity / conductivity 
+Note: we have some gaps of missing data for salinity + conductivity at both sites which overlap with the seven day averages we are trying to calculate.
 
-Note: we have some gaps of missing data for salinity + conductivity at both sites which overlap with the seven day averages we are trying to calculate. 
+\@ CMT: missing from 2024-07-19 and 2024-07-22 (overlap collection date 2024-07-22) \@ DAF: missing from 2024-06-15 and 2024-06-17 (overlap collection date 2024-06-21) and from 2024-07-20 and 2024-07-23 (overlap collection date 2024-07-23)
 
-@ CMT: missing from 2024-07-19 and 2024-07-22 (overlap collection date 2024-07-22)
-@ DAF: missing from 2024-06-15 and 2024-06-17 (overlap collection date 2024-06-21) and from 2024-07-20 and 2024-07-23 (overlap collection date 2024-07-23)   
+Therefore we need to do some interpolation over these dates.
 
-Therefore we need to do some interpolation over these dates. 
-
-The largest continuous gap for salinity/conductivity is for **10 days**. However, we are going to set the max interpolation no greater than 3 (per-notes above).  
+The largest continuous gap for salinity/conductivity is for **10 days**. However, we are going to set the max interpolation no greater than 3 (per-notes above).
 
 ```{r}
 salinity_daily_interpolated <- salinity_daily %>%
@@ -830,16 +813,15 @@ write_csv(salinity_values_imputed,
           path = "/work/clh162/OysterRNA24/DEG_analysis/WGCNA/sal_conduct_daily_interpolated_smallgaps.csv")
 ```
 
-
 ##### pH
 
-Note: we have some gaps of missing pH data at the CMT site which overlap with the seven day averages we are trying to calculate. 
+Note: we have some gaps of missing pH data at the CMT site which overlap with the seven day averages we are trying to calculate.
 
-@ CMT: between 2024-07-21 and 2024-07-22 (overlap collection date 2024-07-22), and between 2024-08-13 and 2024-08-19 (overlap collection date 2024-08-19)
+\@ CMT: between 2024-07-21 and 2024-07-22 (overlap collection date 2024-07-22), and between 2024-08-13 and 2024-08-19 (overlap collection date 2024-08-19)
 
 Therefore we need to do some interpolation over these dates. We can use a spline interpolation to do this.
 
-The largest gap for pH is for **continuous gaps of 15 days**. However, we are going to set the max interpolation no greater than 3 (per-notes above).  
+The largest gap for pH is for **continuous gaps of 15 days**. However, we are going to set the max interpolation no greater than 3 (per-notes above).
 
 ```{r}
 ph_daily_interpolated <- ph_daily %>%
@@ -889,21 +871,21 @@ ph_values_imputed <- ph_daily_interpolated %>%
 
 There were 0 days that were successfully interpolated using the maxgap length of 3 (so no interpolated dataframe saved like for `sal_conduct_daily`).
 
-##### Dissolved oxygen 
+##### Dissolved oxygen
 
-No missing data here so we are good to go w/DO! 
+No missing data here so we are good to go w/DO!
 
 ##### Precipitation
 
-No missing data here so we are good to go w/precipitation! 
+No missing data here so we are good to go w/precipitation!
 
-##### Temperature 
+##### Temperature
 
-By pulling across values of temperature from three sensors, there were no gaps / missing data here so we are good to go w/temperature! 
+By pulling across values of temperature from three sensors, there were no gaps / missing data here so we are good to go w/temperature!
 
-#### Interpolation summary 
+#### Interpolation summary
 
-How many values were interpolated? 
+How many values were interpolated?
 
 ```{r}
 # Create a table to summarize interpolation work 
@@ -917,10 +899,9 @@ tibble::tibble(
 )
 ```
 
-A total of 6 days were interpolated for salinity and conductivity data, while 0 days were interpolated for pH. 
+A total of 6 days were interpolated for salinity and conductivity data, while 0 days were interpolated for pH.
 
-
-#### Filling in the gaps 
+#### Filling in the gaps
 
 We want to update our `event_window_data` (saved as `collection_event_window_env_data.csv`) to fill in the holes with our interpolated data covering short gaps. We can prepared our daily and daily_interpolated datasets to do this:
 
@@ -986,8 +967,7 @@ write_csv(event_window_data_filled,
           path = "/work/clh162/OysterRNA24/DEG_analysis/WGCNA/collection_event_window_env_data_full.csv")
 ```
 
-
-# Environmental Data correlations 
+# Environmental Data correlations
 
 ```{r}
 # create table of correlation coefficients for environmental variables
@@ -1002,7 +982,7 @@ correlation_table <- data.frame(
 correlation_table
 ```
 
-Now that we have our 7-day averages for our environmental parameters paired with our collection dates of tissue samples at each site, we can calculate correlation coefficients between our top DEGs and these environmental parameters. 
+Now that we have our 7-day averages for our environmental parameters paired with our collection dates of tissue samples at each site, we can calculate correlation coefficients between our top DEGs and these environmental parameters.
 
 ### Salinity
 
@@ -1036,7 +1016,7 @@ ggplot(
   theme_classic()
 ```
 
-### pH 
+### pH
 
 ```{r}
 # calculate correlation coefficients
@@ -1068,7 +1048,7 @@ ggplot(
   theme_classic()
 ```
 
-### Dissolved oxygen 
+### Dissolved oxygen
 
 ```{r}
 # calculate correlation coefficients
@@ -1102,21 +1082,10 @@ ggplot(
   theme_classic()
 ```
 
-
-
 ## 2. Explore environmental variables
-
-
 
 ## 3. Run module-level linear regressions
 
-
-
 ## 4. Identify the strongest module-environment associations
 
-
-
-
 ## 5. Examine selected genes using VST-normalized expression
-
-
